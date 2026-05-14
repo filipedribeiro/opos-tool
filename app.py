@@ -34,12 +34,34 @@ def parse_pdf(uploaded_file):
     if not tables_found:
         return None, "Keine Tabellen in der PDF gefunden."
 
-    # Größte Tabelle nehmen (meistens die OPOS-Tabelle)
-    table = max(tables_found, key=lambda t: len(t))
+    # Richtige Tabelle finden: die, die typische OPOS-Spalten enthält
+    opos_keywords = ["rechnungs", "datum", "betrag", "soll", "haben", "beleg"]
+    best_table = None
+    best_score = -1
 
-    # Header aus erster Zeile
-    header = [str(c).strip() if c else f"Spalte_{i}"
-              for i, c in enumerate(table[0])]
+    for table in tables_found:
+        if not table:
+            continue
+        # Header-Zeile suchen – nicht nur erste Zeile prüfen
+        for row_idx, row in enumerate(table[:5]):  # erste 5 Zeilen prüfen
+            row_text = " ".join(
+                str(c).lower() for c in row if c
+            )
+            score = sum(1 for kw in opos_keywords if kw in row_text)
+            if score > best_score:
+                best_score = score
+                best_table = (table, row_idx)
+
+    if not best_table or best_score < 2:
+        return None, "Keine OPOS-Tabelle erkannt. Bitte Spaltenbezeichnungen prüfen."
+
+    table, header_idx = best_table
+
+    # Header aus der erkannten Zeile
+    header = [
+        str(c).strip() if c else f"Spalte_{i}"
+        for i, c in enumerate(table[header_idx])
+    ]
     col_count = len(header)
 
     # Duplikate im Header vermeiden
@@ -53,12 +75,11 @@ def parse_pdf(uploaded_file):
             seen[h] = 0
             clean_header.append(h)
 
-    # Datenzeilen – auf gleiche Spaltenanzahl bringen
+    # Datenzeilen ab der Zeile NACH dem Header
     rows = []
-    for row in table[1:]:
+    for row in table[header_idx + 1:]:
         if not any(cell for cell in row if cell):
-            continue  # leere Zeilen überspringen
-        # Zeile auf richtige Länge bringen
+            continue
         row = list(row)
         if len(row) < col_count:
             row += [None] * (col_count - len(row))
@@ -72,7 +93,6 @@ def parse_pdf(uploaded_file):
     df = pd.DataFrame(rows, columns=clean_header)
     df = df.dropna(how="all")
     return df, None
-
 
 def parse_excel(uploaded_file):
     """Liest die Excel- oder CSV-Datei ein."""
