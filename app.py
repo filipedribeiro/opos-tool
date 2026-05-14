@@ -21,71 +21,87 @@ st.caption("Automatischer Abgleich von OPOS-Listen mit gebuchten Buchungen")
 #  HILFSFUNKTIONEN
 # ─────────────────────────────────────────────
 
-def parse_pdf(uploaded_file):
-    """Liest die OPOS-PDF aus und gibt einen DataFrame zurück."""
-    tables_found = []
+ddef parse_pdf(uploaded_file):
+    """Liest die OPOS-PDF aus - optimiert für Rahmenlinien-Tabellen."""
+    all_tables = []
+
     with pdfplumber.open(uploaded_file) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
+        for page_num, page in enumerate(pdf.pages):
+            # Rahmenlinien-Strategie (passend für deine PDF)
+            tables = page.extract_tables({
+                "vertical_strategy":   "lines",
+                "horizontal_strategy": "lines",
+                "snap_tolerance":      5,
+                "join_tolerance":      5,
+            })
             for table in tables:
                 if table and len(table) > 1:
-                    tables_found.append(table)
+                    all_tables.append(table)
 
-    if not tables_found:
+    if not all_tables:
         return None, "Keine Tabellen in der PDF gefunden."
 
-    # Richtige Tabelle finden: die, die typische OPOS-Spalten enthält
-    opos_keywords = ["rechnungs", "datum", "betrag", "soll", "haben", "beleg"]
+    # OPOS-Tabelle anhand Schlüsselwörter finden
+    opos_keywords = ["rechnungs", "datum", "betrag", "soll", "haben"]
     best_table = None
     best_score = -1
+    best_header_idx = 0
 
-    for table in tables_found:
-        if not table:
-            continue
-        # Header-Zeile suchen – nicht nur erste Zeile prüfen
-        for row_idx, row in enumerate(table[:5]):  # erste 5 Zeilen prüfen
+    for table in all_tables:
+        for row_idx, row in enumerate(table[:10]):
             row_text = " ".join(
-                str(c).lower() for c in row if c
+                str(c).lower().replace("\n", " ") for c in row if c
             )
             score = sum(1 for kw in opos_keywords if kw in row_text)
             if score > best_score:
                 best_score = score
-                best_table = (table, row_idx)
+                best_table = table
+                best_header_idx = row_idx
 
     if not best_table or best_score < 2:
-        return None, "Keine OPOS-Tabelle erkannt. Bitte Spaltenbezeichnungen prüfen."
+        return None, "Keine OPOS-Tabelle erkannt."
 
-    table, header_idx = best_table
-
-    # Header aus der erkannten Zeile
-    header = [
-        str(c).strip() if c else f"Spalte_{i}"
-        for i, c in enumerate(table[header_idx])
-    ]
-    col_count = len(header)
-
-    # Duplikate im Header vermeiden
-    seen = {}
+    # Header bereinigen – Zeilenumbrüche innerhalb Zellen entfernen
+    raw_header = best_table[best_header_idx]
     clean_header = []
-    for h in header:
-        if h in seen:
-            seen[h] += 1
-            clean_header.append(f"{h}_{seen[h]}")
+    seen = {}
+    for i, c in enumerate(raw_header):
+        # \n innerhalb einer Zelle durch Leerzeichen ersetzen
+        val = str(c).strip().replace("\n", " ") if c else f"Spalte_{i}"
+        val = " ".join(val.split())  # mehrfache Leerzeichen bereinigen
+        if not val:
+            val = f"Spalte_{i}"
+        # Duplikate vermeiden
+        if val in seen:
+            seen[val] += 1
+            val = f"{val}_{seen[val]}"
         else:
-            seen[h] = 0
-            clean_header.append(h)
+            seen[val] = 0
+        clean_header.append(val)
 
-    # Datenzeilen ab der Zeile NACH dem Header
+    col_count = len(clean_header)
+
+    # Datenzeilen einlesen
     rows = []
-    for row in table[header_idx + 1:]:
-        if not any(cell for cell in row if cell):
-            continue
-        row = list(row)
-        if len(row) < col_count:
-            row += [None] * (col_count - len(row))
-        elif len(row) > col_count:
-            row = row[:col_count]
-        rows.append(row)
+    for row in best_table[best_header_idx + 1:]:
+        # Zeilenumbrüche auch in Datenzellen bereinigen
+        clean_row = []
+        for cell in row:
+            if cell is None:
+                clean_row.append(None)
+            else:
+                clean_row.append(str(cell).replace("\n", " ").strip())
+        
+        if not any(c for c in clean_row if c):
+            continue  # leere Zeilen überspringen
+
+        # Länge angleichen
+        if len(clean_row) < col_count:
+            clean_row += [None] * (col_count - len(clean_row))
+        elif len(clean_row) > col_count:
+            clean_row = clean_row[:col_count]
+
+        rows.append(clean_row)
 
     if not rows:
         return None, "Tabelle gefunden aber keine Datenzeilen."
