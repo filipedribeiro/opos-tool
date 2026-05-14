@@ -33,6 +33,8 @@ def to_float(val):
     if isinstance(val, (int, float)):
         return float(val)
     s = str(val).strip()
+    # Buchstaben am Ende entfernen (z.B. '8.789,00S' → '8.789,00')
+    s = s.rstrip("SHsh")
     if s in ("", "-", "–", "0", "0,00", "0.00"):
         return 0.0
     # Leerzeichen entfernen (z.B. '8 789,00')
