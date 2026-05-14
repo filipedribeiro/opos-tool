@@ -146,7 +146,17 @@ def parse_pdf(uploaded_file):
                 continue
 
             header = [s[1] for s in spalten]
-            df = pd.DataFrame(rows, columns=header)
+            # Doppelte Spaltennamen automatisch umbenennen
+            seen = {}
+            unique_header = []
+            for h in header:
+                if h in seen:
+                    seen[h] += 1
+                    unique_header.append(f"{h}_{seen[h]}")
+                else:
+                    seen[h] = 0
+                    unique_header.append(h)
+            df = pd.DataFrame(rows, columns=unique_header)
             df = df.dropna(how="all")
             df = df[df.apply(lambda r: any(str(v).strip() for v in r), axis=1)]
             return df, None
