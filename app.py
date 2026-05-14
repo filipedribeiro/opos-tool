@@ -21,7 +21,7 @@ st.caption("Automatischer Abgleich von OPOS-Listen mit gebuchten Buchungen")
 #  HILFSFUNKTIONEN
 # ─────────────────────────────────────────────
 
-ddef parse_pdf(uploaded_file):
+def parse_pdf(uploaded_file):
     """Liest die OPOS-PDF aus - optimiert für Rahmenlinien-Tabellen."""
     all_tables = []
 
