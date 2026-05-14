@@ -443,7 +443,8 @@ if st.button("🚀 Analyse starten", type="primary",
     with tab2:
         if ergebnis["matched"].empty:
             st.info("Keine Buchungen konnten abgeglichen werden.")
-        else:st.dataframe(
+        else:
+            st.dataframe(
                 ergebnis["matched"].drop(columns=["OK"], errors="ignore"),
                 use_container_width=True
             )
