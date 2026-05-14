@@ -51,10 +51,16 @@ def to_float(val):
 
 
 def parse_datum(val):
-    """Versucht verschiedene Datumsformate zu parsen."""
+    """Versucht verschiedene Datumsformate zu parsen, inkl. Datum mit Uhrzeit."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
+    # pandas Timestamp direkt umwandeln
+    if hasattr(val, 'date'):
+        return val.date()
     s = str(val).strip()
+    # Uhrzeit abschneiden falls vorhanden (z.B. '2026-01-31 00:00:00')
+    if " " in s:
+        s = s.split(" ")[0]
     for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y"):
         try:
             return datetime.strptime(s, fmt).date()
