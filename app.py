@@ -443,20 +443,10 @@ if st.button("🚀 Analyse starten", type="primary",
     with tab2:
         if ergebnis["matched"].empty:
             st.info("Keine Buchungen konnten abgeglichen werden.")
-        else:
-            # Farbliche Markierung: Differenzen hervorheben
-            def highlight_diff(row):
-                if not row["OK"]:
-                    return ["background-color: #fff3cd"] * len(row)
-                elif row["Typ"] == "Teilbuchungen":
-                    return ["background-color: #d1ecf1"] * len(row)
-                return [""] * len(row)
-
-            styled = ergebnis["matched"].drop(columns=["OK"]).style.apply(
-                highlight_diff, axis=1
+        else:st.dataframe(
+                ergebnis["matched"].drop(columns=["OK"], errors="ignore"),
+                use_container_width=True
             )
-            st.dataframe(styled, use_container_width=True)
-
             csv = ergebnis["matched"].to_csv(index=False, sep=";").encode("utf-8-sig")
             st.download_button(
                 "⬇️ Abgeglichene Buchungen als CSV exportieren",
