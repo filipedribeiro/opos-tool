@@ -23,26 +23,54 @@ st.caption("Automatischer Abgleich von OPOS-Listen mit gebuchten Buchungen")
 
 def parse_pdf(uploaded_file):
     """Liest die OPOS-PDF aus und gibt einen DataFrame zurück."""
-    rows = []
+    tables_found = []
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
             for table in tables:
-                for row in table:
-                    if row and any(cell for cell in row if cell):
-                        rows.append(row)
+                if table and len(table) > 1:
+                    tables_found.append(table)
 
-    if not rows:
+    if not tables_found:
         return None, "Keine Tabellen in der PDF gefunden."
 
-    # Erste Zeile als Header verwenden
-    header = rows[0]
-    data   = rows[1:]
-    df = pd.DataFrame(data, columns=header)
+    # Größte Tabelle nehmen (meistens die OPOS-Tabelle)
+    table = max(tables_found, key=lambda t: len(t))
 
-    # Leere Zeilen entfernen
+    # Header aus erster Zeile
+    header = [str(c).strip() if c else f"Spalte_{i}"
+              for i, c in enumerate(table[0])]
+    col_count = len(header)
+
+    # Duplikate im Header vermeiden
+    seen = {}
+    clean_header = []
+    for h in header:
+        if h in seen:
+            seen[h] += 1
+            clean_header.append(f"{h}_{seen[h]}")
+        else:
+            seen[h] = 0
+            clean_header.append(h)
+
+    # Datenzeilen – auf gleiche Spaltenanzahl bringen
+    rows = []
+    for row in table[1:]:
+        if not any(cell for cell in row if cell):
+            continue  # leere Zeilen überspringen
+        # Zeile auf richtige Länge bringen
+        row = list(row)
+        if len(row) < col_count:
+            row += [None] * (col_count - len(row))
+        elif len(row) > col_count:
+            row = row[:col_count]
+        rows.append(row)
+
+    if not rows:
+        return None, "Tabelle gefunden aber keine Datenzeilen."
+
+    df = pd.DataFrame(rows, columns=clean_header)
     df = df.dropna(how="all")
-    df.columns = df.columns.str.strip()
     return df, None
 
 
