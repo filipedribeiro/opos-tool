@@ -22,93 +22,84 @@ st.caption("Automatischer Abgleich von OPOS-Listen mit gebuchten Buchungen")
 # ─────────────────────────────────────────────
 
 def parse_pdf(uploaded_file):
-    """Liest die OPOS-PDF aus - optimiert für Rahmenlinien-Tabellen."""
-    all_tables = []
+    """Liest OPOS-PDF über Textpositionen - robust gegen enge Spalten."""
+    import pdfplumber
 
     with pdfplumber.open(uploaded_file) as pdf:
-        for page_num, page in enumerate(pdf.pages):
-            # Rahmenlinien-Strategie (passend für deine PDF)
-            tables = page.extract_tables({
-                "vertical_strategy":   "lines",
-                "horizontal_strategy": "lines",
-                "snap_tolerance":      5,
-                "join_tolerance":      5,
-            })
-            for table in tables:
-                if table and len(table) > 1:
-                    all_tables.append(table)
-
-    if not all_tables:
-        return None, "Keine Tabellen in der PDF gefunden."
-
-    # OPOS-Tabelle anhand Schlüsselwörter finden
-    opos_keywords = ["rechnungs", "datum", "betrag", "soll", "haben"]
-    best_table = None
-    best_score = -1
-    best_header_idx = 0
-
-    for table in all_tables:
-        for row_idx, row in enumerate(table[:10]):
-            row_text = " ".join(
-                str(c).lower().replace("\n", " ") for c in row if c
+        for page in pdf.pages:
+            # Alle Wörter mit ihrer X-Position extrahieren
+            words = page.extract_words(
+                x_tolerance=3,
+                y_tolerance=3,
+                keep_blank_chars=False,
+                use_text_flow=False,
             )
-            score = sum(1 for kw in opos_keywords if kw in row_text)
-            if score > best_score:
-                best_score = score
-                best_table = table
-                best_header_idx = row_idx
+            if not words:
+                continue
 
-    if not best_table or best_score < 2:
-        return None, "Keine OPOS-Tabelle erkannt."
+            # Zeilen gruppieren anhand Y-Position
+            from collections import defaultdict
+            zeilen = defaultdict(list)
+            for w in words:
+                # Y-Position auf 5px runden → gleiche Zeile
+                y = round(w["top"] / 5) * 5
+                zeilen[y].append(w)
 
-    # Header bereinigen – Zeilenumbrüche innerhalb Zellen entfernen
-    raw_header = best_table[best_header_idx]
-    clean_header = []
-    seen = {}
-    for i, c in enumerate(raw_header):
-        # \n innerhalb einer Zelle durch Leerzeichen ersetzen
-        val = str(c).strip().replace("\n", " ") if c else f"Spalte_{i}"
-        val = " ".join(val.split())  # mehrfache Leerzeichen bereinigen
-        if not val:
-            val = f"Spalte_{i}"
-        # Duplikate vermeiden
-        if val in seen:
-            seen[val] += 1
-            val = f"{val}_{seen[val]}"
-        else:
-            seen[val] = 0
-        clean_header.append(val)
+            # Zeilen sortieren (von oben nach unten)
+            sorted_y = sorted(zeilen.keys())
+            zeilen_liste = [
+                sorted(zeilen[y], key=lambda w: w["x0"])
+                for y in sorted_y
+            ]
 
-    col_count = len(clean_header)
+            # Header-Zeile finden (enthält OPOS-Schlüsselwörter)
+            opos_keywords = ["rechnungs", "datum", "betrag", "soll", "haben"]
+            header_idx = None
+            for i, zeile in enumerate(zeilen_liste):
+                text = " ".join(w["text"].lower() for w in zeile)
+                score = sum(1 for kw in opos_keywords if kw in text)
+                if score >= 2:
+                    header_idx = i
+                    break
 
-    # Datenzeilen einlesen
-    rows = []
-    for row in best_table[best_header_idx + 1:]:
-        # Zeilenumbrüche auch in Datenzellen bereinigen
-        clean_row = []
-        for cell in row:
-            if cell is None:
-                clean_row.append(None)
-            else:
-                clean_row.append(str(cell).replace("\n", " ").strip())
-        
-        if not any(c for c in clean_row if c):
-            continue  # leere Zeilen überspringen
+            if header_idx is None:
+                continue
 
-        # Länge angleichen
-        if len(clean_row) < col_count:
-            clean_row += [None] * (col_count - len(clean_row))
-        elif len(clean_row) > col_count:
-            clean_row = clean_row[:col_count]
+            # Spaltenposition aus Header ableiten
+            header_words = zeilen_liste[header_idx]
+            spalten = [(w["x0"], w["text"]) for w in header_words]
 
-        rows.append(clean_row)
+            def zuordnen(wort_x, spalten):
+                """Ordnet ein Wort der nächsten Spalte links zu."""
+                best = 0
+                for idx, (sx, _) in enumerate(spalten):
+                    if wort_x >= sx - 10:
+                        best = idx
+                return best
 
-    if not rows:
-        return None, "Tabelle gefunden aber keine Datenzeilen."
+            # Datenzeilen einlesen
+            rows = []
+            for zeile in zeilen_liste[header_idx + 1:]:
+                if not zeile:
+                    continue
+                row = [""] * len(spalten)
+                for w in zeile:
+                    col_idx = zuordnen(w["x0"], spalten)
+                    row[col_idx] = (row[col_idx] + " " + w["text"]).strip()
+                # Leere Zeilen überspringen
+                if not any(row):
+                    continue
+                rows.append(row)
 
-    df = pd.DataFrame(rows, columns=clean_header)
-    df = df.dropna(how="all")
-    return df, None
+            if not rows:
+                continue
+
+            header = [s[1] for s in spalten]
+            df = pd.DataFrame(rows, columns=header)
+            df = df.dropna(how="all")
+            return df, None
+
+    return None, "Keine OPOS-Tabelle in der PDF gefunden."
 
 def parse_excel(uploaded_file):
     """Liest die Excel- oder CSV-Datei ein."""
