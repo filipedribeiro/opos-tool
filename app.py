@@ -299,8 +299,8 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
     # Excel-Saldo (gespiegelt: Haben - Soll)
     excel_summe_soll  = df_excel["_soll"].sum()
     excel_summe_haben = df_excel["_haben"].sum()
-    if spiegelung:
-        saldo_excel = excel_summe_haben - excel_summe_soll
+   if spiegelung:
+        saldo_excel = -(excel_summe_haben - excel_summe_soll)
     else:
         saldo_excel = excel_summe_soll - excel_summe_haben
 
@@ -523,10 +523,7 @@ if st.session_state.ergebnis:
         st.markdown("**Excel – Landesverband**")
         st.metric("Summe Umsatz Soll",  fmt_eur(ergebnis["excel_summe_soll"]))
         st.metric("Summe Umsatz Haben", fmt_eur(ergebnis["excel_summe_haben"]))
-        if cfg["spiegelung"]:
-            st.metric("Saldo (Haben – Soll)", fmt_eur(ergebnis["saldo_excel"]))
-        else:
-            st.metric("Saldo (Soll – Haben)", fmt_eur(ergebnis["saldo_excel"]))
+       st.metric("Saldo (Soll – Haben)", fmt_eur(ergebnis["saldo_excel"]))
 
     with col_d:
         st.markdown("**Differenz**")
