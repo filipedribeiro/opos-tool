@@ -184,6 +184,9 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum):
     df_excel["_soll"]   = df_excel[col_x_soll].apply(to_float)
     df_excel["_haben"]  = df_excel[col_x_haben].apply(to_float)
     df_excel["_datum"]  = df_excel[col_x_datum].apply(parse_datum)
+    # DIAGNOSE EXCEL
+    st.write("Excel Datum-Check:", 
+        df_excel[[col_x_datum, "_datum"]].head(20))
     df_excel["_rechnr"] = df_excel[col_x_rechnr].apply(normalize_rechnr)
 
     # ── Datumsfilter auf OPOS anwenden (Von und Bis inklusiv) ──
