@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from rapidfuzz import fuzz
-from datetime import datetime
+from datetime import datetime, date
 
 # ─────────────────────────────────────────────
 #  SEITENKONFIGURATION
@@ -34,11 +34,8 @@ def to_float(val):
     s = str(val).strip()
     if s in ("", "-", "–", "0", "0,00", "0.00", "None", "nan"):
         return 0.0
-    # Buchstaben am Ende entfernen (z.B. '8.789,00S' → '8.789,00')
     s = s.rstrip("SHsh ")
-    # Leerzeichen als Tausendertrennzeichen entfernen
     s = s.replace(" ", "")
-    # Deutsches Format: '8.789,00' → '8789.00'
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
@@ -50,14 +47,22 @@ def to_float(val):
 
 
 def parse_datum(val):
-    """Parst Datum in verschiedenen Formaten inkl. pandas Timestamp."""
+    """
+    Parst Datum in verschiedenen Formaten.
+    Gibt immer ein datetime.date zurück (nie datetime.datetime).
+    """
     if val is None:
         return None
-    if hasattr(val, "date"):
+    # pandas Timestamp oder datetime direkt zu date konvertieren
+    if hasattr(val, "date") and callable(val.date):
         return val.date()
+    # bereits ein date-Objekt
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
     if isinstance(val, float) and pd.isna(val):
         return None
     s = str(val).strip()
+    # Uhrzeit abschneiden falls vorhanden
     if " " in s:
         s = s.split(" ")[0]
     for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y"):
@@ -66,6 +71,39 @@ def parse_datum(val):
         except ValueError:
             continue
     return None
+
+
+def zu_date(val):
+    """Konvertiert sicher zu datetime.date – für Vergleiche."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    return None
+
+
+def datum_in_bereich(d, von, bis):
+    """
+    Prüft ob ein Datum im Bereich [von, bis] liegt.
+    Beide Grenzen sind inklusiv.
+    Konvertiert alle Werte sicher zu date vor dem Vergleich.
+    """
+    if d is None:
+        return False
+    d   = zu_date(d)   if not isinstance(d, date)   else d
+    von = zu_date(von) if von and not isinstance(von, date) else von
+    bis = zu_date(bis) if bis and not isinstance(bis, date) else bis
+    if d is None:
+        return False
+    if von and bis:
+        return von <= d <= bis
+    elif bis:
+        return d <= bis
+    elif von:
+        return d >= von
+    return True
 
 
 def normalize_rechnr(s):
@@ -115,9 +153,9 @@ def lade_excel(uploaded_file):
 def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum):
     """
     Kernfunktion: Vergleicht OPOS-Liste mit Excel-Buchungen.
-    - Datumsfilter: Von/Bis auf OPOS anwenden
+    - Datumsfilter Von/Bis (beide inklusiv) auf OPOS anwenden
     - Soll/Haben-Spiegelung: OPOS Betrag Soll ↔ Excel Umsatz Haben
-    - Teilbuchungen: mehrere Excel-Zeilen mit gleicher Rechnungsnr. werden summiert
+    - Teilbuchungen: mehrere Excel-Zeilen mit gleicher Rechnungsnr. summiert
     """
     col_o_rechnr = cfg["opos_rechnr"]
     col_o_datum  = cfg["opos_datum"]
@@ -148,28 +186,9 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum):
     df_excel["_datum"]  = df_excel[col_x_datum].apply(parse_datum)
     df_excel["_rechnr"] = df_excel[col_x_rechnr].apply(normalize_rechnr)
 
-    # ── Datumsfilter auf OPOS anwenden ──
-    # Sicherstellen dass alle Daten als date verglichen werden
-    def datum_ok(d, von, bis):
-        if d is None:
-            return False
-        # datetime zu date konvertieren falls nötig
-        if hasattr(d, "date"):
-            d = d.date()
-        if hasattr(von, "date"):
-            von = von.date()
-        if hasattr(bis, "date"):
-            bis = bis.date()
-        if von and bis:
-            return von <= d <= bis
-        elif bis:
-            return d <= bis
-        elif von:
-            return d >= von
-        return True
-
+    # ── Datumsfilter auf OPOS anwenden (Von und Bis inklusiv) ──
     df_opos = df_opos[df_opos["_datum"].apply(
-        lambda d: datum_ok(d, von_datum, bis_datum)
+        lambda d: datum_in_bereich(d, von_datum, bis_datum)
     )]
 
     # ── Excel nach Rechnungsnummer gruppieren ──
@@ -280,7 +299,7 @@ with st.sidebar:
     von_datum = st.date_input(
         "Von Datum (optional)",
         value=None,
-        help="Buchungen VOR diesem Datum werden ignoriert. Leer lassen = kein Von-Filter"
+        help="Buchungen VOR diesem Datum werden ignoriert. Leer = kein Von-Filter"
     )
     bis_datum = st.date_input(
         "Bis Datum / Stichtag",
@@ -355,16 +374,15 @@ with col2:
     if excel_file:
         st.success(f"✓ {excel_file.name} hochgeladen")
 
-# Datumsfilter-Info anzeigen
+# Aktiven Datumsfilter anzeigen
 if von_datum and bis_datum:
     st.info(
-        f"📅 Datumsfilter aktiv: "
-        f"**{von_datum.strftime('%d.%m.%Y')}** bis "
-        f"**{bis_datum.strftime('%d.%m.%Y')}**"
+        f"📅 Zeitraum: **{von_datum.strftime('%d.%m.%Y')}** "
+        f"bis **{bis_datum.strftime('%d.%m.%Y')}** (beide Tage inklusiv)"
     )
 elif bis_datum:
     st.info(
-        f"📅 Stichtag aktiv: bis **{bis_datum.strftime('%d.%m.%Y')}**"
+        f"📅 Stichtag: bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)"
     )
 
 st.divider()
@@ -489,14 +507,13 @@ if st.button(
     with tab3:
         st.subheader("Abstimmungsübersicht")
 
-        # Datumsfilter-Zusammenfassung
         if von_datum and bis_datum:
             st.info(
                 f"📅 Zeitraum: **{von_datum.strftime('%d.%m.%Y')}** "
-                f"bis **{bis_datum.strftime('%d.%m.%Y')}**"
+                f"bis **{bis_datum.strftime('%d.%m.%Y')}** (beide Tage inklusiv)"
             )
         elif bis_datum:
-            st.info(f"📅 Stichtag: **{bis_datum.strftime('%d.%m.%Y')}**")
+            st.info(f"📅 Stichtag: bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)")
 
         col_a, col_b = st.columns(2)
 
