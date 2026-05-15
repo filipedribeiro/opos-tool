@@ -45,7 +45,7 @@ def to_float(val):
 
 
 def parse_datum(val):
-    """Parst Datum sicher zu datetime.date. Behebt Zeitzonenproblem."""
+    """Parst Datum sicher zu datetime.date."""
     if val is None:
         return None
     if hasattr(val, "year") and hasattr(val, "month") and hasattr(val, "day"):
@@ -138,9 +138,8 @@ def ist_31_dezember(d):
 
 def opos_soll_haben(betrag, kennzeichen):
     """
-    Leitet Soll/Haben-Werte aus Saldo-Betrag und Kennzeichen ab.
+    Leitet Soll/Haben aus Saldo-Betrag und Kennzeichen ab.
     S = Soll, H = Haben
-    Gibt (soll, haben) zurück.
     """
     kz = str(kennzeichen).strip().upper() if kennzeichen else ""
     b  = abs(to_float(betrag))
@@ -149,7 +148,6 @@ def opos_soll_haben(betrag, kennzeichen):
     elif kz.startswith("H"):
         return 0.0, b
     else:
-        # Kein Kennzeichen: positiv = Soll, negativ = Haben
         raw = to_float(betrag)
         if raw >= 0:
             return raw, 0.0
@@ -158,16 +156,11 @@ def opos_soll_haben(betrag, kennzeichen):
 
 
 def finde_erklaerende_buchungen(differenz, offene_buchungen, tol=0.01):
-    """
-    Sucht Kombinationen von offenen Buchungen die die Differenz erklären.
-    Max. 4er-Kombinationen, max. 500 Buchungen für Performance.
-    """
+    """Sucht Kombinationen die die Differenz erklären."""
     if abs(differenz) < tol:
         return []
-
     ergebnisse = []
     buchungen  = offene_buchungen[:500]
-
     for anzahl in range(1, 5):
         for kombi in combinations(range(len(buchungen)), anzahl):
             summe = sum(buchungen[i]["betrag"] for i in kombi)
@@ -175,42 +168,35 @@ def finde_erklaerende_buchungen(differenz, offene_buchungen, tol=0.01):
                 ergebnisse.append([buchungen[i] for i in kombi])
             if len(ergebnisse) >= 5:
                 return ergebnisse
-
     return ergebnisse
 
 
 def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum, extra_31_12=None):
-    """
-    Kernfunktion: Vollständiger Buchungsabgleich mit Saldenberechnung.
-    OPOS: Betrag aus Spalte 'Saldo', Richtung aus Spalte 'Kennzeichen' (S/H)
-    Excel: Umsatz Soll / Umsatz Haben (getrennte Spalten)
-    """
-    col_o_rechnr    = cfg["opos_rechnr"]
-    col_o_datum     = cfg["opos_datum"]
-    col_o_saldo     = cfg["opos_saldo"]
-    col_o_kz        = cfg["opos_kz"]
-    col_o_text      = cfg["opos_text"]
+    """Kernfunktion: Vollständiger Buchungsabgleich."""
+    col_o_rechnr = cfg["opos_rechnr"]
+    col_o_datum  = cfg["opos_datum"]
+    col_o_saldo  = cfg["opos_saldo"]
+    col_o_kz     = cfg["opos_kz"]
+    col_o_text   = cfg["opos_text"]
 
-    col_x_rechnr    = cfg["excel_rechnr"]
-    col_x_datum     = cfg["excel_datum"]
-    col_x_soll      = cfg["excel_soll"]
-    col_x_haben     = cfg["excel_haben"]
+    col_x_rechnr = cfg["excel_rechnr"]
+    col_x_datum  = cfg["excel_datum"]
+    col_x_soll   = cfg["excel_soll"]
+    col_x_haben  = cfg["excel_haben"]
 
-    fuzzy_thresh    = cfg["fuzzy"]
-    tol             = cfg["toleranz"]
-    spiegelung      = cfg["spiegelung"]
+    fuzzy_thresh = cfg["fuzzy"]
+    tol          = cfg["toleranz"]
+    spiegelung   = cfg["spiegelung"]
 
     # ── OPOS vorbereiten ──
     df_opos = df_opos.copy()
     df_opos["_datum"]  = df_opos[col_o_datum].apply(parse_datum)
     df_opos["_rechnr"] = df_opos[col_o_rechnr].apply(normalize_rechnr)
     df_opos["_is31"]   = df_opos["_datum"].apply(ist_31_dezember)
-
-    # Soll/Haben aus Saldo + Kennzeichen ableiten
-    df_opos["_soll"]  = df_opos.apply(
+    df_opos["_soll"]   = df_opos.apply(
         lambda r: opos_soll_haben(r[col_o_saldo], r[col_o_kz])[0], axis=1
     )
-    df_opos["_haben"] = df_opos.apply(
+    df_opos["_haben"]  = df_opos.apply(
         lambda r: opos_soll_haben(r[col_o_saldo], r[col_o_kz])[1], axis=1
     )
 
@@ -221,7 +207,7 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum, extra_31_12=None):
     df_excel["_datum"]  = df_excel[col_x_datum].apply(parse_datum)
     df_excel["_rechnr"] = df_excel[col_x_rechnr].apply(normalize_rechnr)
 
-    # ── 31.12.-Buchungen aus OPOS (vor Filter) ──
+    # ── 31.12.-Buchungen (vor Filter) ──
     df_31_12 = df_opos[df_opos["_is31"]].copy()
 
     # ── Datumsfilter auf OPOS ──
@@ -262,10 +248,7 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum, extra_31_12=None):
         )
         op_kz = str(op.get(col_o_kz, "")).strip()
 
-        # 1. Exakter Treffer
         ex_rows = excel_gruppen.get(op_rechnr)
-
-        # 2. Fuzzy-Treffer
         if not ex_rows:
             for key, rows in excel_gruppen.items():
                 if fuzzy_match(op_rechnr, key, fuzzy_thresh):
@@ -291,7 +274,6 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum, extra_31_12=None):
         ex_sum_haben = sum(r["_haben"] for r in ex_rows)
         anzahl       = len(ex_rows)
 
-        # Spiegelungslogik
         if spiegelung:
             diff_soll  = abs(op_soll  - ex_sum_haben)
             diff_haben = abs(op_haben - ex_sum_soll)
@@ -324,21 +306,23 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum, extra_31_12=None):
             "OK":                   ok
         })
 
-    # ── Salden berechnen (beide: Soll - Haben) ──
+    # ── Salden berechnen ──
     opos_summe_soll  = df_opos_filtered["_soll"].sum()
     opos_summe_haben = df_opos_filtered["_haben"].sum()
     saldo_opos       = opos_summe_soll - opos_summe_haben
 
     excel_summe_soll  = df_excel["_soll"].sum()
     excel_summe_haben = df_excel["_haben"].sum()
-    if spiegelung:
-        saldo_excel = -(excel_summe_haben - excel_summe_soll)
-    else:
-        saldo_excel = excel_summe_soll - excel_summe_haben
+    saldo_excel       = -(excel_summe_haben - excel_summe_soll)
 
-    differenz = saldo_excel - saldo_opos
+    # ── Spiegelungsabgleich ──
+    # (a) Soll OPOS − Haben Excel  →  sollten sich entsprechen
+    # (b) Haben OPOS − Soll Excel  →  sollten sich entsprechen
+    # Differenz = (a) − (b)
+    diff_a = opos_summe_soll  - excel_summe_haben
+    diff_b = opos_summe_haben - excel_summe_soll
+    differenz_ab = diff_a - diff_b
 
-    # ── Offene Buchungen für Differenzanalyse ──
     offene_fuer_analyse = []
     for m in missing:
         betrag = m["_soll"] if m["_soll"] > 0 else m["_haben"]
@@ -353,38 +337,39 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum, extra_31_12=None):
             })
 
     return {
-        "matched":           pd.DataFrame(matched),
-        "missing":           pd.DataFrame(missing).drop(
+        "matched":            pd.DataFrame(matched),
+        "missing":            pd.DataFrame(missing).drop(
             columns=["_soll", "_haben"], errors="ignore"
         ),
-        "missing_raw":       missing,
-        "opos_summe_soll":   opos_summe_soll,
-        "opos_summe_haben":  opos_summe_haben,
-        "saldo_opos":        saldo_opos,
-        "excel_summe_soll":  excel_summe_soll,
-        "excel_summe_haben": excel_summe_haben,
-        "saldo_excel":       saldo_excel,
-        "differenz":         differenz,
-        "opos_count":        len(df_opos_filtered),
-        "df_opos":           df_opos_filtered,
-        "df_excel":          df_excel,
-        "df_31_12":          df_31_12,
-        "offene_analyse":    offene_fuer_analyse,
-        "col_o_rechnr":      col_o_rechnr,
-        "col_o_text":        col_o_text,
+        "missing_raw":        missing,
+        "opos_summe_soll":    opos_summe_soll,
+        "opos_summe_haben":   opos_summe_haben,
+        "saldo_opos":         saldo_opos,
+        "excel_summe_soll":   excel_summe_soll,
+        "excel_summe_haben":  excel_summe_haben,
+        "saldo_excel":        saldo_excel,
+        "diff_a":             diff_a,
+        "diff_b":             diff_b,
+        "differenz_ab":       differenz_ab,
+        "opos_count":         len(df_opos_filtered),
+        "df_opos":            df_opos_filtered,
+        "df_excel":           df_excel,
+        "df_31_12":           df_31_12,
+        "offene_analyse":     offene_fuer_analyse,
+        "col_o_rechnr":       col_o_rechnr,
+        "col_o_text":         col_o_text,
     }
 
 
 # ─────────────────────────────────────────────
-#  SIDEBAR – EINSTELLUNGEN
+#  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Einstellungen")
 
     st.subheader("📅 Datumsfilter")
     von_datum = st.date_input(
-        "Von Datum (optional)",
-        value=None,
+        "Von Datum (optional)", value=None,
         help="Buchungen VOR diesem Datum werden ignoriert"
     )
     bis_datum = st.date_input(
@@ -400,7 +385,7 @@ with st.sidebar:
     opos_datum  = st.text_input("Buchungsdatum",     value="Datum")
     opos_text   = st.text_input("Buchungstext",      value="Buchungstext")
     opos_saldo  = st.text_input("Betrag (Saldo)",    value="Saldo")
-    opos_kz     = st.text_input("Kennzeichen (S/H)", value="Kennzeichen")
+    opos_kz     = st.text_input("Kennzeichen (S/H)", value="Unnamed: 9")
     st.caption("S = Soll, H = Haben")
 
     st.subheader("📊 Spalten Buchungs-Excel")
@@ -413,24 +398,21 @@ with st.sidebar:
     st.subheader("🔄 Abgleichsoptionen")
     spiegelung = st.checkbox(
         "Soll/Haben-Spiegelung aktiv", value=True,
-        help="OPOS Soll (S) ↔ Excel Umsatz Haben"
+        help="OPOS S ↔ Excel Umsatz Haben"
     )
     fuzzy    = st.slider("Fuzzy-Matching (%)", 60, 100, 85)
     toleranz = st.number_input("Betragstoleranz (€)", value=0.01, step=0.01)
 
 
 # ─────────────────────────────────────────────
-#  HAUPTBEREICH – UPLOAD
+#  UPLOAD
 # ─────────────────────────────────────────────
 col1, col2 = st.columns(2)
-
 with col1:
     st.subheader("📄 OPOS-Liste (Excel/CSV)")
-    st.caption("Vom Hauptverband – Betrag via Saldo + Kennzeichen")
+    st.caption("Vom Hauptverband")
     opos_file = st.file_uploader(
-        "OPOS-Datei hochladen",
-        type=["xlsx", "xls", "csv"],
-        key="opos"
+        "OPOS-Datei hochladen", type=["xlsx", "xls", "csv"], key="opos"
     )
     if opos_file:
         st.success(f"✓ {opos_file.name}")
@@ -439,20 +421,15 @@ with col2:
     st.subheader("📊 Gebuchte Buchungen (Excel/CSV)")
     st.caption("Interne Liste Landesverband")
     excel_file = st.file_uploader(
-        "Buchungs-Datei hochladen",
-        type=["xlsx", "xls", "csv"],
-        key="excel"
+        "Buchungs-Datei hochladen", type=["xlsx", "xls", "csv"], key="excel"
     )
     if excel_file:
         st.success(f"✓ {excel_file.name}")
 
 if von_datum and bis_datum:
-    st.info(
-        f"📅 Zeitraum: **{von_datum.strftime('%d.%m.%Y')}** "
-        f"bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)"
-    )
+    st.info(f"📅 {von_datum.strftime('%d.%m.%Y')} bis {bis_datum.strftime('%d.%m.%Y')} (inklusiv)")
 elif bis_datum:
-    st.info(f"📅 Stichtag: bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)")
+    st.info(f"📅 Stichtag: bis {bis_datum.strftime('%d.%m.%Y')} (inklusiv)")
 
 st.divider()
 
@@ -460,17 +437,11 @@ st.divider()
 #  SESSION STATE
 # ─────────────────────────────────────────────
 for key, val in {
-    "ergebnis":     None,
-    "extra_31_12":  [],
-    "df_opos_raw":  None,
-    "df_excel_raw": None,
-    "cfg":          None,
-    "von_datum":    None,
-    "bis_datum":    None,
+    "ergebnis": None, "extra_31_12": [], "df_opos_raw": None,
+    "df_excel_raw": None, "cfg": None, "von_datum": None, "bis_datum": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
-
 
 # ─────────────────────────────────────────────
 #  ANALYSE STARTEN
@@ -482,57 +453,45 @@ if st.button(
     disabled=not (opos_file and excel_file and datum_ok)
 ):
     cfg = {
-        "opos_rechnr":  opos_rechnr,
-        "opos_datum":   opos_datum,
-        "opos_text":    opos_text,
-        "opos_saldo":   opos_saldo,
-        "opos_kz":      opos_kz,
-        "excel_rechnr": excel_rechnr,
-        "excel_datum":  excel_datum,
-        "excel_text":   excel_text,
-        "excel_soll":   excel_soll,
-        "excel_haben":  excel_haben,
-        "spiegelung":   spiegelung,
-        "fuzzy":        fuzzy,
-        "toleranz":     toleranz,
+        "opos_rechnr": opos_rechnr, "opos_datum": opos_datum,
+        "opos_text": opos_text, "opos_saldo": opos_saldo, "opos_kz": opos_kz,
+        "excel_rechnr": excel_rechnr, "excel_datum": excel_datum,
+        "excel_text": excel_text, "excel_soll": excel_soll,
+        "excel_haben": excel_haben, "spiegelung": spiegelung,
+        "fuzzy": fuzzy, "toleranz": toleranz,
     }
 
     with st.spinner("📄 OPOS wird eingelesen..."):
         df_opos, err = lade_excel(opos_file)
     if err:
-        st.error(f"Fehler OPOS: {err}")
-        st.stop()
+        st.error(f"Fehler OPOS: {err}"); st.stop()
 
     fehlende = [c for c in [opos_rechnr, opos_datum, opos_saldo, opos_kz]
                 if c not in df_opos.columns]
     if fehlende:
         st.error(f"Spalten nicht gefunden in OPOS: {fehlende}")
-        with st.expander("📋 Gefundene Spalten in OPOS"):
+        with st.expander("📋 Gefundene Spalten"):
             st.write(list(df_opos.columns))
-        with st.expander("🔍 Vorschau OPOS (erste 5 Zeilen)"):
-            st.dataframe(df_opos.head())
         st.stop()
 
     with st.spinner("📊 Excel wird eingelesen..."):
         df_excel, err = lade_excel(excel_file)
     if err:
-        st.error(f"Fehler Excel: {err}")
-        st.stop()
+        st.error(f"Fehler Excel: {err}"); st.stop()
 
     fehlende = [c for c in [excel_rechnr, excel_datum, excel_soll, excel_haben]
                 if c not in df_excel.columns]
     if fehlende:
         st.error(f"Spalten nicht gefunden in Excel: {fehlende}")
-        with st.expander("📋 Gefundene Spalten in Excel"):
+        with st.expander("📋 Gefundene Spalten"):
             st.write(list(df_excel.columns))
         st.stop()
 
-    st.session_state.df_opos_raw  = df_opos
-    st.session_state.df_excel_raw = df_excel
-    st.session_state.cfg          = cfg
-    st.session_state.von_datum    = von_datum
-    st.session_state.bis_datum    = bis_datum
-    st.session_state.extra_31_12  = []
+    st.session_state.update({
+        "df_opos_raw": df_opos, "df_excel_raw": df_excel,
+        "cfg": cfg, "von_datum": von_datum, "bis_datum": bis_datum,
+        "extra_31_12": []
+    })
 
     with st.spinner("🔄 Abgleich läuft..."):
         st.session_state.ergebnis = abgleichen(
@@ -541,7 +500,7 @@ if st.button(
 
 
 # ─────────────────────────────────────────────
-#  ERGEBNISSE ANZEIGEN
+#  ERGEBNISSE
 # ─────────────────────────────────────────────
 if st.session_state.ergebnis:
     ergebnis = st.session_state.ergebnis
@@ -553,39 +512,68 @@ if st.session_state.ergebnis:
     #  SALDENÜBERSICHT
     # ══════════════════════════════════════════
     st.subheader("📊 Saldenübersicht")
-    st.caption("Beide Seiten: Saldo = Summe Soll – Summe Haben")
 
-    col_o, col_x, col_d = st.columns(3)
+    # Zeile 1: Rohdaten beider Seiten
+    col_o, col_x = st.columns(2)
 
     with col_o:
         st.markdown("**OPOS – Hauptverband**")
-        st.metric("Summe Soll",         fmt_eur(ergebnis["opos_summe_soll"]))
-        st.metric("Summe Haben",        fmt_eur(ergebnis["opos_summe_haben"]))
-        st.metric("Saldo (Soll–Haben)", fmt_eur(ergebnis["saldo_opos"]))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Summe Soll",  fmt_eur(ergebnis["opos_summe_soll"]))
+        c2.metric("Summe Haben", fmt_eur(ergebnis["opos_summe_haben"]))
+        c3.metric("Saldo",       fmt_eur(ergebnis["saldo_opos"]))
 
     with col_x:
         st.markdown("**Excel – Landesverband**")
-        st.metric("Summe Umsatz Soll",  fmt_eur(ergebnis["excel_summe_soll"]))
-        st.metric("Summe Umsatz Haben", fmt_eur(ergebnis["excel_summe_haben"]))
-        st.metric("Saldo (Soll–Haben)", fmt_eur(ergebnis["saldo_excel"]))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Summe Soll",  fmt_eur(ergebnis["excel_summe_soll"]))
+        c2.metric("Summe Haben", fmt_eur(ergebnis["excel_summe_haben"]))
+        c3.metric("Saldo",       fmt_eur(ergebnis["saldo_excel"]))
 
-    with col_d:
-        st.markdown("**Differenz**")
-        diff = ergebnis["differenz"]
-        if abs(diff) < cfg["toleranz"]:
+    st.divider()
+
+    # Zeile 2: Spiegelungsabgleich
+    st.markdown("**🔄 Spiegelungsabgleich**")
+    st.caption("Soll OPOS entspricht Haben Excel – Haben OPOS entspricht Soll Excel")
+
+    ca, cb, cdiff = st.columns(3)
+
+    diff_a     = ergebnis["diff_a"]
+    diff_b     = ergebnis["diff_b"]
+    differenz  = ergebnis["differenz_ab"]
+
+    with ca:
+        st.metric(
+            "(a) Soll OPOS − Haben Excel",
+            fmt_eur(diff_a),
+            help="Sollte 0 sein wenn beide Seiten übereinstimmen"
+        )
+
+    with cb:
+        st.metric(
+            "(b) Haben OPOS − Soll Excel",
+            fmt_eur(diff_b),
+            help="Sollte 0 sein wenn beide Seiten übereinstimmen"
+        )
+
+    with cdiff:
+        if abs(differenz) < cfg["toleranz"]:
             st.success("✅ Vollständig abgestimmt")
-            st.metric("Differenz", "0,00 €")
+            st.metric("Differenz (a) − (b)", "0,00 €")
         else:
-            richtung = "Excel höher als OPOS" if diff > 0 else "OPOS höher als Excel"
+            richtung = "OPOS höher" if differenz > 0 else "Excel höher"
             st.warning(f"⚠️ {richtung}")
-            st.metric("Differenz", fmt_eur(abs(diff)))
-        st.metric("Abgeglichen", len(ergebnis["matched"]))
-        st.metric("Fehlend",     len(ergebnis["missing"]))
+            st.metric("Differenz (a) − (b)", fmt_eur(differenz))
+
+    # Abgeglichen / Fehlend
+    cm, cf = st.columns(2)
+    cm.metric("Abgeglichen", len(ergebnis["matched"]))
+    cf.metric("Fehlend",     len(ergebnis["missing"]))
 
     st.divider()
 
     # ══════════════════════════════════════════
-    #  31.12.-BUCHUNGEN AUSWAHL
+    #  31.12.-BUCHUNGEN
     # ══════════════════════════════════════════
     df_31      = ergebnis["df_31_12"]
     col_rechnr = ergebnis["col_o_rechnr"]
@@ -594,30 +582,26 @@ if st.session_state.ergebnis:
     if len(df_31) > 0:
         st.subheader("📅 Optionale 31.12.-Buchungen")
         st.info(
-            f"**{len(df_31)} Buchungen** mit Datum 31. Dezember gefunden. "
-            f"Diese liegen außerhalb des Zeitraums – du kannst sie einzeln einbeziehen."
+            f"**{len(df_31)} Buchungen** mit Datum 31. Dezember – "
+            f"außerhalb des Zeitraums. Einzeln einbeziehen:"
         )
 
         auswahl = []
         for _, row in df_31.iterrows():
-            rechnr = str(row[col_rechnr])
-            text   = (
-                str(row.get(col_text, ""))
-                if col_text in df_31.columns else ""
-            )
-            soll   = row["_soll"]
-            haben  = row["_haben"]
-            betrag = fmt_eur(soll) if soll > 0 else fmt_eur(haben)
-            kz     = str(row.get(cfg["opos_kz"], "")).strip()
-            label  = f"**{rechnr}** – {text[:50]} – {betrag} ({kz})"
+            rechnr  = str(row[col_rechnr])
+            text    = str(row.get(col_text, "")) if col_text in df_31.columns else ""
+            soll    = row["_soll"]
+            haben   = row["_haben"]
+            betrag  = fmt_eur(soll) if soll > 0 else fmt_eur(haben)
+            kz      = str(row.get(cfg["opos_kz"], "")).strip()
+            label   = f"**{rechnr}** – {text[:50]} – {betrag} ({kz})"
             checked = rechnr in st.session_state.extra_31_12
-
             if st.checkbox(label, value=checked, key=f"cb_31_{rechnr}"):
                 auswahl.append(rechnr)
 
         if sorted(auswahl) != sorted(st.session_state.extra_31_12):
             st.session_state.extra_31_12 = auswahl
-            with st.spinner("🔄 Salden werden neu berechnet..."):
+            with st.spinner("🔄 Wird neu berechnet..."):
                 st.session_state.ergebnis = abgleichen(
                     st.session_state.df_opos_raw,
                     st.session_state.df_excel_raw,
@@ -629,24 +613,23 @@ if st.session_state.ergebnis:
             st.rerun()
 
         if auswahl:
-            st.success(f"✓ {len(auswahl)} Buchung(en) zusätzlich einbezogen")
+            st.success(f"✓ {len(auswahl)} Buchung(en) einbezogen")
 
         st.divider()
 
     # ══════════════════════════════════════════
     #  DIFFERENZANALYSE
     # ══════════════════════════════════════════
-    diff = ergebnis["differenz"]
-    if abs(diff) >= cfg["toleranz"] and ergebnis["offene_analyse"]:
+    if abs(differenz) >= cfg["toleranz"] and ergebnis["offene_analyse"]:
         st.subheader("🔍 Differenzanalyse")
         st.warning(
-            f"Differenz von **{fmt_eur(abs(diff))}** erkannt. "
-            f"Suche nach Buchungen die diese Differenz erklären..."
+            f"Differenz von **{fmt_eur(abs(differenz))}** erkannt. "
+            f"Suche nach Buchungen die diese erklären..."
         )
 
         with st.spinner("Kombinationen werden berechnet..."):
             kombinationen = finde_erklaerende_buchungen(
-                diff, ergebnis["offene_analyse"], cfg["toleranz"]
+                differenz, ergebnis["offene_analyse"], cfg["toleranz"]
             )
 
         if kombinationen:
@@ -659,19 +642,11 @@ if st.session_state.ergebnis:
                     f"= {fmt_eur(summe)}"
                 ):
                     for b in kombi:
-                        st.write(
-                            f"📌 **{b['rechnr']}** – {b['text']} – "
-                            f"{fmt_eur(b['betrag'])}"
-                        )
-                    st.info(
-                        "Diese Buchung(en) erklären die Differenz vollständig. "
-                        "Bitte in Excel nachtragen."
-                    )
+                        st.write(f"📌 **{b['rechnr']}** – {b['text']} – {fmt_eur(b['betrag'])}")
+                    st.info("Diese Buchung(en) erklären die Differenz. Bitte in Excel nachtragen.")
         else:
-            st.info(
-                "Keine Kombination gefunden die die Differenz exakt erklärt. "
-                "Bitte manuell prüfen."
-            )
+            st.info("Keine Kombination gefunden. Bitte manuell prüfen.")
+
         st.divider()
 
     # ══════════════════════════════════════════
@@ -689,9 +664,7 @@ if st.session_state.ergebnis:
         else:
             st.warning(f"{len(ergebnis['missing'])} Buchung(en) fehlen in Excel:")
             st.dataframe(ergebnis["missing"], use_container_width=True)
-            csv = ergebnis["missing"].to_csv(
-                index=False, sep=";"
-            ).encode("utf-8-sig")
+            csv = ergebnis["missing"].to_csv(index=False, sep=";").encode("utf-8-sig")
             st.download_button(
                 "⬇️ Fehlende Buchungen exportieren",
                 csv, "fehlende_buchungen.csv", "text/csv"
@@ -705,9 +678,7 @@ if st.session_state.ergebnis:
                 ergebnis["matched"].drop(columns=["OK"], errors="ignore"),
                 use_container_width=True
             )
-            csv = ergebnis["matched"].to_csv(
-                index=False, sep=";"
-            ).encode("utf-8-sig")
+            csv = ergebnis["matched"].to_csv(index=False, sep=";").encode("utf-8-sig")
             st.download_button(
                 "⬇️ Abgeglichene Buchungen exportieren",
                 csv, "abgeglichene_buchungen.csv", "text/csv"
@@ -715,20 +686,15 @@ if st.session_state.ergebnis:
 
     with tab3:
         st.subheader("📌 Spiegelungslogik")
-        if cfg["spiegelung"]:
-            st.info(
-                "**OPOS Kennzeichen S** (Hauptverband) "
-                "↔ **Excel Umsatz Haben** (Landesverband)\n\n"
-                "**OPOS Kennzeichen H** (Hauptverband) "
-                "↔ **Excel Umsatz Soll** (Landesverband)\n\n"
-                "Saldo = Summe Soll – Summe Haben (beide Seiten)"
-            )
-        else:
-            st.info("Spiegelung deaktiviert.")
-
-        with st.expander("🔍 Vorschau OPOS-Rohdaten (erste 10 Zeilen)"):
+        st.info(
+            "**OPOS Kennzeichen S** (Hauptverband) ↔ **Excel Umsatz Haben** (Landesverband)\n\n"
+            "**OPOS Kennzeichen H** (Hauptverband) ↔ **Excel Umsatz Soll** (Landesverband)\n\n"
+            "Saldo = Summe Soll – Summe Haben (beide Seiten)\n\n"
+            "Differenz = (Soll OPOS − Haben Excel) − (Haben OPOS − Soll Excel)"
+        )
+        with st.expander("🔍 Vorschau OPOS (erste 10 Zeilen)"):
             st.dataframe(ergebnis["df_opos"].head(10))
-        with st.expander("🔍 Vorschau Excel-Rohdaten (erste 10 Zeilen)"):
+        with st.expander("🔍 Vorschau Excel (erste 10 Zeilen)"):
             st.dataframe(ergebnis["df_excel"].head(10))
 
 elif not opos_file or not excel_file:
