@@ -454,6 +454,20 @@ if st.button("🚀 Analyse starten", type="primary",
     with st.spinner("🔄 Abgleich läuft..."):
         ergebnis = abgleichen(df_opos, df_excel, cfg, stichtag_input)
 
+                 # ── DIAGNOSE: Zeige was verglichen wird ──
+    with st.expander("🔍 Diagnose – Rechnungsnummern Vergleich"):
+        st.markdown("**Erste 10 Rechnungsnummern aus der OPOS-PDF:**")
+        opos_nrn = df_opos[opos_rechnr].apply(normalize_rechnr).head(10).tolist()
+        st.write(opos_nrn)
+        st.markdown("**Erste 10 Rechnungsnummern aus Excel:**")
+        excel_nrn = df_excel[excel_rechnr].apply(normalize_rechnr).head(10).tolist()
+        st.write(excel_nrn)
+        st.markdown("**Beispielvergleich – erste OPOS-Nr. gegen alle Excel-Nrn.:**")
+        if opos_nrn:
+            test = opos_nrn[0]
+            treffer = [e for e in excel_nrn if fuzzy_match(test, e, fuzzy)]
+            st.write(f"OPOS `{test}` → Treffer in Excel: {treffer if treffer else 'KEINER'}")
+
     st.success("✅ Analyse abgeschlossen!")
 
     # ── Kennzahlen ──
