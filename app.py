@@ -174,6 +174,9 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum):
     df_opos["_soll"]   = df_opos[col_o_soll].apply(to_float)
     df_opos["_haben"]  = df_opos[col_o_haben].apply(to_float)
     df_opos["_datum"]  = df_opos[col_o_datum].apply(parse_datum)
+    # DIAGNOSE
+        st.write("OPOS Datum-Check:", 
+            df_opos[[col_o_datum, "_datum"]].head(10))
     df_opos["_rechnr"] = df_opos[col_o_rechnr].apply(normalize_rechnr)
 
     # ── Excel vorbereiten ──
