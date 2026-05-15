@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from rapidfuzz import fuzz
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 # ─────────────────────────────────────────────
 #  SEITENKONFIGURATION
@@ -48,27 +48,29 @@ def to_float(val):
 
 def parse_datum(val):
     """
-    Parst Datum in verschiedenen Formaten.
-    Gibt immer ein datetime.date zurück (nie datetime.datetime).
+    Parst Datum sicher zu datetime.date.
+    Behebt Zeitzonenproblem das den 01.01. als 31.12. erscheinen lässt.
     """
     if val is None:
         return None
-   if hasattr(val, "date") and callable(val.date):
-        # Zeitzone entfernen vor der Konvertierung
-        if hasattr(val, "tzinfo") and val.tzinfo is not None:
-            val = val.replace(tzinfo=None)
-        # Direkt aus den Komponenten bauen – vermeidet Zeitzonenprobleme
+
+    # pandas Timestamp / datetime → direkt aus Komponenten bauen
+    # (vermeidet Zeitzonenverschiebung beim 01.01.)
+    if hasattr(val, "year") and hasattr(val, "month") and hasattr(val, "day"):
         try:
-            return date(val.year, val.month, val.day)
+            return date(int(val.year), int(val.month), int(val.day))
         except Exception:
-            return val.date()
-    # bereits ein date-Objekt
+            pass
+
+    # bereits ein reines date-Objekt
     if isinstance(val, date) and not isinstance(val, datetime):
         return val
+
     if isinstance(val, float) and pd.isna(val):
         return None
+
+    # String parsen
     s = str(val).strip()
-    # Uhrzeit abschneiden falls vorhanden
     if " " in s:
         s = s.split(" ")[0]
     for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y"):
@@ -76,32 +78,21 @@ def parse_datum(val):
             return datetime.strptime(s, fmt).date()
         except ValueError:
             continue
-    return None
 
-
-def zu_date(val):
-    """Konvertiert sicher zu datetime.date – für Vergleiche."""
-    if val is None:
-        return None
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
     return None
 
 
 def datum_in_bereich(d, von, bis):
     """
-    Prüft ob ein Datum im Bereich [von, bis] liegt.
-    Beide Grenzen sind inklusiv.
-    Konvertiert alle Werte sicher zu date vor dem Vergleich.
+    Prüft ob ein Datum im Bereich [von, bis] liegt (beide inklusiv).
+    Konvertiert alle Werte sicher zu date.
     """
     if d is None:
         return False
-    d   = zu_date(d)   if not isinstance(d, date)   else d
-    von = zu_date(von) if von and not isinstance(von, date) else von
-    bis = zu_date(bis) if bis and not isinstance(bis, date) else bis
-    if d is None:
+    # Sicherstellen dass d ein date ist
+    if isinstance(d, datetime):
+        d = date(d.year, d.month, d.day)
+    if not isinstance(d, date):
         return False
     if von and bis:
         return von <= d <= bis
@@ -244,8 +235,6 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum):
         anzahl       = len(ex_rows)
 
         # ── Spiegelungslogik ──
-        # OPOS Betrag Soll  ↔ Excel Umsatz Haben
-        # OPOS Betrag Haben ↔ Excel Umsatz Soll
         if spiegelung:
             diff_soll  = abs(op_soll  - ex_sum_haben)
             diff_haben = abs(op_haben - ex_sum_soll)
@@ -519,7 +508,9 @@ if st.button(
                 f"bis **{bis_datum.strftime('%d.%m.%Y')}** (beide Tage inklusiv)"
             )
         elif bis_datum:
-            st.info(f"📅 Stichtag: bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)")
+            st.info(
+                f"📅 Stichtag: bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)"
+            )
 
         col_a, col_b = st.columns(2)
 
