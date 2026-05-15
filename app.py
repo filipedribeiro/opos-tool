@@ -299,8 +299,8 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
     # Excel-Saldo (gespiegelt: Haben - Soll)
     excel_summe_soll  = df_excel["_soll"].sum()
     excel_summe_haben = df_excel["_haben"].sum()
-   if spiegelung:
-        saldo_excel = -(excel_summe_haben - excel_summe_soll)
+   if spiegelung: 
+       saldo_excel = -(excel_summe_haben - excel_summe_soll)
     else:
         saldo_excel = excel_summe_soll - excel_summe_haben
 
