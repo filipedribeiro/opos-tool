@@ -53,9 +53,15 @@ def parse_datum(val):
     """
     if val is None:
         return None
-    # pandas Timestamp oder datetime direkt zu date konvertieren
-    if hasattr(val, "date") and callable(val.date):
-        return val.date()
+   if hasattr(val, "date") and callable(val.date):
+        # Zeitzone entfernen vor der Konvertierung
+        if hasattr(val, "tzinfo") and val.tzinfo is not None:
+            val = val.replace(tzinfo=None)
+        # Direkt aus den Komponenten bauen – vermeidet Zeitzonenprobleme
+        try:
+            return date(val.year, val.month, val.day)
+        except Exception:
+            return val.date()
     # bereits ein date-Objekt
     if isinstance(val, date) and not isinstance(val, datetime):
         return val
