@@ -149,18 +149,28 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum):
     df_excel["_rechnr"] = df_excel[col_x_rechnr].apply(normalize_rechnr)
 
     # ── Datumsfilter auf OPOS anwenden ──
-    if von_datum and bis_datum:
-        df_opos = df_opos[df_opos["_datum"].apply(
-            lambda d: d is not None and von_datum <= d <= bis_datum
-        )]
-    elif bis_datum:
-        df_opos = df_opos[df_opos["_datum"].apply(
-            lambda d: d is not None and d <= bis_datum
-        )]
-    elif von_datum:
-        df_opos = df_opos[df_opos["_datum"].apply(
-            lambda d: d is not None and d >= von_datum
-        )]
+    # Sicherstellen dass alle Daten als date verglichen werden
+    def datum_ok(d, von, bis):
+        if d is None:
+            return False
+        # datetime zu date konvertieren falls nötig
+        if hasattr(d, "date"):
+            d = d.date()
+        if hasattr(von, "date"):
+            von = von.date()
+        if hasattr(bis, "date"):
+            bis = bis.date()
+        if von and bis:
+            return von <= d <= bis
+        elif bis:
+            return d <= bis
+        elif von:
+            return d >= von
+        return True
+
+    df_opos = df_opos[df_opos["_datum"].apply(
+        lambda d: datum_ok(d, von_datum, bis_datum)
+    )]
 
     # ── Excel nach Rechnungsnummer gruppieren ──
     excel_gruppen = {}
