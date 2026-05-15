@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
-import pdfplumber
 from rapidfuzz import fuzz
 from datetime import datetime
-from collections import defaultdict
 
 # ─────────────────────────────────────────────
 #  SEITENKONFIGURATION
@@ -15,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("📊 OPOS-Abstimmungs-Tool")
-st.caption("Automatischer Abgleich von OPOS-Listen mit gebuchten Buchungen")
+st.caption("Automatischer Abgleich von OPOS-Liste mit gebuchten Buchungen")
 
 
 # ─────────────────────────────────────────────
@@ -24,25 +22,26 @@ st.caption("Automatischer Abgleich von OPOS-Listen mit gebuchten Buchungen")
 
 def to_float(val):
     """
-    Wandelt einen Wert sicher in eine Zahl um.
+    Wandelt einen Wert sicher in float um.
     Unterstützt deutsches Format: '8.789,00' → 8789.0
-    Unterstützt amerikanisches Format: '8789.00' → 8789.0
     """
     if val is None:
         return 0.0
     if isinstance(val, (int, float)):
+        if pd.isna(val):
+            return 0.0
         return float(val)
     s = str(val).strip()
-    # Buchstaben am Ende entfernen (z.B. '8.789,00S' → '8.789,00')
-    s = s.rstrip("SHsh")
-    if s in ("", "-", "–", "0", "0,00", "0.00"):
+    if s in ("", "-", "–", "0", "0,00", "0.00", "None", "nan"):
         return 0.0
-    # Leerzeichen entfernen (z.B. '8 789,00')
+    # Buchstaben am Ende entfernen (z.B. '8.789,00S' → '8.789,00')
+    s = s.rstrip("SHsh ")
+    # Leerzeichen als Tausendertrennzeichen entfernen
     s = s.replace(" ", "")
-    # Deutsches Format: Punkt als Tausender, Komma als Dezimal
+    # Deutsches Format: '8.789,00' → '8789.00'
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
-    elif "," in s and "." not in s:
+    elif "," in s:
         s = s.replace(",", ".")
     try:
         return float(s)
@@ -51,14 +50,14 @@ def to_float(val):
 
 
 def parse_datum(val):
-    """Versucht verschiedene Datumsformate zu parsen, inkl. Datum mit Uhrzeit."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    """Parst Datum in verschiedenen Formaten inkl. pandas Timestamp."""
+    if val is None:
         return None
-    # pandas Timestamp direkt umwandeln
-    if hasattr(val, 'date'):
+    if hasattr(val, "date"):
         return val.date()
+    if isinstance(val, float) and pd.isna(val):
+        return None
     s = str(val).strip()
-    # Uhrzeit abschneiden falls vorhanden (z.B. '2026-01-31 00:00:00')
     if " " in s:
         s = s.split(" ")[0]
     for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y"):
@@ -77,7 +76,7 @@ def normalize_rechnr(s):
 
 
 def fuzzy_match(r1, r2, threshold):
-    """Gibt True zurück wenn zwei Rechnungsnummern ähnlich genug sind."""
+    """True wenn zwei Rechnungsnummern ähnlich genug sind."""
     r1 = normalize_rechnr(r1)
     r2 = normalize_rechnr(r2)
     if not r1 or not r2:
@@ -85,119 +84,40 @@ def fuzzy_match(r1, r2, threshold):
     return fuzz.ratio(r1, r2) >= threshold
 
 
-def parse_pdf(uploaded_file):
-    """
-    Liest OPOS-PDF über Textpositionen aus.
-    Funktioniert auch bei engen Spalten und Briefkopf-Dokumenten.
-    """
-    with pdfplumber.open(uploaded_file) as pdf:
-        for page in pdf.pages:
-            words = page.extract_words(
-                x_tolerance=3,
-                y_tolerance=3,
-                keep_blank_chars=False,
-                use_text_flow=False,
-            )
-            if not words:
-                continue
-
-            # Zeilen nach Y-Position gruppieren
-            zeilen = defaultdict(list)
-            for w in words:
-                y = round(w["top"] / 4) * 4
-                zeilen[y].append(w)
-
-            sorted_y = sorted(zeilen.keys())
-            zeilen_liste = [
-                sorted(zeilen[y], key=lambda w: w["x0"])
-                for y in sorted_y
-            ]
-
-            # Header-Zeile anhand OPOS-Schlüsselwörter finden
-            opos_keywords = ["rechnungs", "datum", "betrag", "soll", "haben", "beleg"]
-            header_idx = None
-            best_score = 0
-            for i, zeile in enumerate(zeilen_liste):
-                text = " ".join(w["text"].lower() for w in zeile)
-                score = sum(1 for kw in opos_keywords if kw in text)
-                if score > best_score:
-                    best_score = score
-                    header_idx = i
-
-            if header_idx is None or best_score < 2:
-                continue
-
-            # Spalten aus Header ableiten
-            header_words = zeilen_liste[header_idx]
-            spalten = [(w["x0"], w["text"]) for w in header_words]
-
-            def zuordnen(wort_x, sp):
-                best = 0
-                for idx, (sx, _) in enumerate(sp):
-                    if wort_x >= sx - 8:
-                        best = idx
-                return best
-
-            # Datenzeilen einlesen
-            rows = []
-            for zeile in zeilen_liste[header_idx + 1:]:
-                if not zeile:
-                    continue
-                row = [""] * len(spalten)
-                for w in zeile:
-                    col_idx = zuordnen(w["x0"], spalten)
-                    row[col_idx] = (row[col_idx] + " " + w["text"]).strip()
-                if any(row):
-                    rows.append(row)
-
-            if not rows:
-                continue
-
-            header = [s[1] for s in spalten]
-            # Doppelte Spaltennamen automatisch umbenennen
-            seen = {}
-            unique_header = []
-            for h in header:
-                if h in seen:
-                    seen[h] += 1
-                    unique_header.append(f"{h}_{seen[h]}")
-                else:
-                    seen[h] = 0
-                    unique_header.append(h)
-            df = pd.DataFrame(rows, columns=unique_header)
-            df = df.dropna(how="all")
-            df = df[df.apply(lambda r: any(str(v).strip() for v in r), axis=1)]
-            return df, None
-
-    return None, "Keine OPOS-Tabelle in der PDF gefunden."
-
-
-def parse_excel(uploaded_file):
-    """Liest die Excel- oder CSV-Datei ein."""
-    name = uploaded_file.name.lower()
-    if name.endswith(".csv"):
-        try:
-            df = pd.read_csv(uploaded_file, sep=";", encoding="utf-8-sig")
-        except Exception:
-            df = pd.read_csv(uploaded_file, sep=",", encoding="utf-8-sig")
-    else:
-        df = pd.read_excel(uploaded_file)
-    df.columns = df.columns.str.strip()
-    return df, None
-
-
 def fmt_eur(val):
-    """Formatiert eine Zahl als deutschen Euro-Betrag."""
+    """Formatiert als deutschen Euro-Betrag: 1234.5 → '1.234,50 €'"""
     try:
-        return f"{float(val):,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+        f = float(val)
+        if f == 0.0:
+            return "–"
+        return f"{f:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
         return str(val)
 
 
-def abgleichen(df_opos, df_excel, cfg, stichtag):
+def lade_excel(uploaded_file):
+    """Liest Excel oder CSV ein."""
+    name = uploaded_file.name.lower()
+    try:
+        if name.endswith(".csv"):
+            try:
+                df = pd.read_csv(uploaded_file, sep=";", encoding="utf-8-sig")
+            except Exception:
+                df = pd.read_csv(uploaded_file, sep=",", encoding="utf-8-sig")
+        else:
+            df = pd.read_excel(uploaded_file)
+        df.columns = df.columns.str.strip()
+        return df, None
+    except Exception as e:
+        return None, str(e)
+
+
+def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum):
     """
     Kernfunktion: Vergleicht OPOS-Liste mit Excel-Buchungen.
-    Berücksichtigt Soll/Haben-Spiegelung und Teilbuchungen.
+    - Datumsfilter: Von/Bis auf OPOS anwenden
+    - Soll/Haben-Spiegelung: OPOS Betrag Soll ↔ Excel Umsatz Haben
+    - Teilbuchungen: mehrere Excel-Zeilen mit gleicher Rechnungsnr. werden summiert
     """
     col_o_rechnr = cfg["opos_rechnr"]
     col_o_datum  = cfg["opos_datum"]
@@ -228,10 +148,18 @@ def abgleichen(df_opos, df_excel, cfg, stichtag):
     df_excel["_datum"]  = df_excel[col_x_datum].apply(parse_datum)
     df_excel["_rechnr"] = df_excel[col_x_rechnr].apply(normalize_rechnr)
 
-    # ── Stichtagsfilter ──
-    if stichtag:
+    # ── Datumsfilter auf OPOS anwenden ──
+    if von_datum and bis_datum:
         df_opos = df_opos[df_opos["_datum"].apply(
-            lambda d: d is not None and d <= stichtag
+            lambda d: d is not None and von_datum <= d <= bis_datum
+        )]
+    elif bis_datum:
+        df_opos = df_opos[df_opos["_datum"].apply(
+            lambda d: d is not None and d <= bis_datum
+        )]
+    elif von_datum:
+        df_opos = df_opos[df_opos["_datum"].apply(
+            lambda d: d is not None and d >= von_datum
         )]
 
     # ── Excel nach Rechnungsnummer gruppieren ──
@@ -266,12 +194,12 @@ def abgleichen(df_opos, df_excel, cfg, stichtag):
 
         if not ex_rows:
             missing.append({
-                "Rechnungsnr.": op[col_o_rechnr],
-                "Datum":        op[col_o_datum],
-                "Buchungstext": op_text,
-                "Betrag Soll":  fmt_eur(op_soll)  if op_soll  else "–",
-                "Betrag Haben": fmt_eur(op_haben) if op_haben else "–",
-                "Grund":        "Nicht in Excel gefunden"
+                "Rechnungsnr. (OPOS)": op[col_o_rechnr],
+                "Datum":               op[col_o_datum],
+                "Buchungstext":        op_text,
+                "Betrag Soll":         fmt_eur(op_soll),
+                "Betrag Haben":        fmt_eur(op_haben),
+                "Grund":               "Nicht in Excel gefunden"
             })
             continue
 
@@ -281,6 +209,8 @@ def abgleichen(df_opos, df_excel, cfg, stichtag):
         anzahl       = len(ex_rows)
 
         # ── Spiegelungslogik ──
+        # OPOS Betrag Soll  ↔ Excel Umsatz Haben
+        # OPOS Betrag Haben ↔ Excel Umsatz Soll
         if spiegelung:
             diff_soll  = abs(op_soll  - ex_sum_haben)
             diff_haben = abs(op_haben - ex_sum_soll)
@@ -298,25 +228,25 @@ def abgleichen(df_opos, df_excel, cfg, stichtag):
             typ = "Differenz"
 
         matched.append({
-            "Rechnungsnr.":        op[col_o_rechnr],
-            "Datum":               op[col_o_datum],
-            "Buchungstext":        op_text,
-            "OPOS Betrag Soll":    fmt_eur(op_soll)      if op_soll  else "–",
-            "OPOS Betrag Haben":   fmt_eur(op_haben)     if op_haben else "–",
-            "Excel Umsatz Haben":  fmt_eur(ex_sum_haben) if spiegelung else fmt_eur(ex_sum_soll),
-            "Excel Umsatz Soll":   fmt_eur(ex_sum_soll)  if spiegelung else fmt_eur(ex_sum_haben),
-            "Differenz":           fmt_eur(round(max(diff_soll, diff_haben), 2)),
-            "Anzahl Teilbuchungen":anzahl,
-            "Typ":                 typ,
-            "OK":                  ok
+            "Rechnungsnr. (OPOS)":  op[col_o_rechnr],
+            "Datum":                op[col_o_datum],
+            "Buchungstext":         op_text,
+            "OPOS Betrag Soll":     fmt_eur(op_soll),
+            "OPOS Betrag Haben":    fmt_eur(op_haben),
+            "Excel Umsatz Haben":   fmt_eur(ex_sum_haben) if spiegelung else fmt_eur(ex_sum_soll),
+            "Excel Umsatz Soll":    fmt_eur(ex_sum_soll)  if spiegelung else fmt_eur(ex_sum_haben),
+            "Differenz":            fmt_eur(round(max(diff_soll, diff_haben), 2)),
+            "Anzahl Teilbuchungen": anzahl,
+            "Typ":                  typ,
+            "OK":                   ok
         })
 
-    # ── Salden ──
-    saldo_opos  = df_opos["_soll"].sum()  - df_opos["_haben"].sum()
+    # ── Salden berechnen ──
+    saldo_opos = df_opos["_soll"].sum() - df_opos["_haben"].sum()
     if spiegelung:
         saldo_excel = df_excel["_haben"].sum() - df_excel["_soll"].sum()
     else:
-        saldo_excel = df_excel["_soll"].sum()  - df_excel["_haben"].sum()
+        saldo_excel = df_excel["_soll"].sum() - df_excel["_haben"].sum()
 
     return {
         "matched":     pd.DataFrame(matched),
@@ -324,6 +254,8 @@ def abgleichen(df_opos, df_excel, cfg, stichtag):
         "saldo_opos":  saldo_opos,
         "saldo_excel": saldo_excel,
         "opos_count":  len(df_opos),
+        "df_opos":     df_opos,
+        "df_excel":    df_excel,
     }
 
 
@@ -333,24 +265,46 @@ def abgleichen(df_opos, df_excel, cfg, stichtag):
 with st.sidebar:
     st.header("⚙️ Einstellungen")
 
-    st.subheader("📄 Spalten in der OPOS-PDF")
+    # ── Datumsfilter ──
+    st.subheader("📅 Datumsfilter")
+    von_datum = st.date_input(
+        "Von Datum (optional)",
+        value=None,
+        help="Buchungen VOR diesem Datum werden ignoriert. Leer lassen = kein Von-Filter"
+    )
+    bis_datum = st.date_input(
+        "Bis Datum / Stichtag",
+        value=datetime(2026, 4, 30).date(),
+        help="Buchungen NACH diesem Datum werden ignoriert"
+    )
+    if von_datum and bis_datum and von_datum > bis_datum:
+        st.error("⚠️ Von-Datum darf nicht nach dem Bis-Datum liegen!")
+
+    # ── OPOS Spalten ──
+    st.subheader("📄 Spalten in der OPOS-Datei")
     opos_rechnr = st.text_input("Rechnungsnummer",  value="Rechnungs-Nr.")
     opos_datum  = st.text_input("Buchungsdatum",    value="Datum")
     opos_text   = st.text_input("Buchungstext",     value="Buchungstext")
-    opos_soll   = st.text_input("Betrag Soll",      value="Soll")
-    opos_haben  = st.text_input("Betrag Haben",     value="Haben")
+    opos_soll   = st.text_input("Betrag Soll",      value="Betrag Soll")
+    opos_haben  = st.text_input("Betrag Haben",     value="Betrag Haben")
 
-    st.subheader("📊 Spalten in der Excel-Datei")
+    # ── Excel Spalten ──
+    st.subheader("📊 Spalten in der Buchungs-Excel")
     excel_rechnr = st.text_input("Rechnungsnummer / Buchungsfeld", value="Belegfeld1")
     excel_datum  = st.text_input("Buchungsdatum ",                  value="Datum")
     excel_text   = st.text_input("Buchungstext ",                   value="Buchungstext")
     excel_soll   = st.text_input("Umsatz Soll",                    value="Umsatz Soll")
     excel_haben  = st.text_input("Umsatz Haben",                   value="Umsatz Haben")
 
+    # ── Abgleichsoptionen ──
     st.subheader("🔄 Abgleichsoptionen")
     spiegelung = st.checkbox(
         "Soll/Haben-Spiegelung aktiv", value=True,
-        help="Hauptverband und Landesverband buchen spiegelverkehrt"
+        help=(
+            "Hauptverband und Landesverband buchen spiegelverkehrt:\n"
+            "OPOS Betrag Soll ↔ Excel Umsatz Haben\n"
+            "OPOS Betrag Haben ↔ Excel Umsatz Soll"
+        )
     )
     fuzzy = st.slider(
         "Fuzzy-Matching Schwelle (%)", 60, 100, 85,
@@ -360,10 +314,6 @@ with st.sidebar:
         "Betragstoleranz (€)", value=0.01, step=0.01,
         help="Erlaubte Rundungsdifferenz beim Betragsvergleich"
     )
-    stichtag_input = st.date_input(
-        "Stichtag für Abstimmung",
-        value=datetime(2026, 4, 30).date()
-    )
 
 
 # ─────────────────────────────────────────────
@@ -372,33 +322,52 @@ with st.sidebar:
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("📄 OPOS-Liste (PDF)")
-    pdf_file = st.file_uploader(
-        "PDF vom Hauptverband hochladen",
-        type=["pdf"],
-        help="Die monatliche OPOS-Liste als PDF"
+    st.subheader("📄 OPOS-Liste (Excel/CSV)")
+    st.caption("Vom Hauptverband – konvertiert aus PDF")
+    opos_file = st.file_uploader(
+        "OPOS-Datei hochladen",
+        type=["xlsx", "xls", "csv"],
+        key="opos",
+        help="Die OPOS-Liste als Excel oder CSV"
     )
-    if pdf_file:
-        st.success(f"✓ {pdf_file.name} hochgeladen")
+    if opos_file:
+        st.success(f"✓ {opos_file.name} hochgeladen")
 
 with col2:
-    st.subheader("📊 Gebuchte Buchungen (Excel)")
+    st.subheader("📊 Gebuchte Buchungen (Excel/CSV)")
+    st.caption("Interne Buchungsliste des Landesverbands")
     excel_file = st.file_uploader(
-        "Excel- oder CSV-Datei hochladen",
+        "Buchungs-Datei hochladen",
         type=["xlsx", "xls", "csv"],
+        key="excel",
         help="Interne Buchungsliste des Landesverbands"
     )
     if excel_file:
         st.success(f"✓ {excel_file.name} hochgeladen")
+
+# Datumsfilter-Info anzeigen
+if von_datum and bis_datum:
+    st.info(
+        f"📅 Datumsfilter aktiv: "
+        f"**{von_datum.strftime('%d.%m.%Y')}** bis "
+        f"**{bis_datum.strftime('%d.%m.%Y')}**"
+    )
+elif bis_datum:
+    st.info(
+        f"📅 Stichtag aktiv: bis **{bis_datum.strftime('%d.%m.%Y')}**"
+    )
 
 st.divider()
 
 # ─────────────────────────────────────────────
 #  ANALYSE STARTEN
 # ─────────────────────────────────────────────
-if st.button("🚀 Analyse starten", type="primary",
-             disabled=not (pdf_file and excel_file)):
+datum_ok = not (von_datum and bis_datum and von_datum > bis_datum)
 
+if st.button(
+    "🚀 Analyse starten", type="primary",
+    disabled=not (opos_file and excel_file and datum_ok)
+):
     cfg = {
         "opos_rechnr":  opos_rechnr,
         "opos_datum":   opos_datum,
@@ -415,58 +384,43 @@ if st.button("🚀 Analyse starten", type="primary",
         "toleranz":     toleranz,
     }
 
-    # ── PDF einlesen ──
-    with st.spinner("📄 PDF wird analysiert..."):
-        df_opos, err = parse_pdf(pdf_file)
-
+    # ── OPOS einlesen ──
+    with st.spinner("📄 OPOS-Datei wird eingelesen..."):
+        df_opos, err = lade_excel(opos_file)
     if err:
-        st.error(f"Fehler beim PDF-Lesen: {err}")
+        st.error(f"Fehler beim Lesen der OPOS-Datei: {err}")
         st.stop()
 
-    # Spalten prüfen
     fehlende = [c for c in [opos_rechnr, opos_datum, opos_soll, opos_haben]
                 if c not in df_opos.columns]
     if fehlende:
-        st.error(f"Diese Spalten wurden im PDF nicht gefunden: {fehlende}")
-        with st.expander("Gefundene Spalten – zum Anpassen in der Seitenleiste"):
+        st.error(f"Diese Spalten wurden in der OPOS-Datei nicht gefunden: {fehlende}")
+        with st.expander("📋 Gefundene Spalten in der OPOS-Datei"):
             st.write(list(df_opos.columns))
-        with st.expander("Vorschau der eingelesenen PDF-Daten"):
+        with st.expander("🔍 Vorschau OPOS-Datei (erste 5 Zeilen)"):
             st.dataframe(df_opos.head())
         st.stop()
 
     # ── Excel einlesen ──
-    with st.spinner("📊 Excel wird eingelesen..."):
-        df_excel, err = parse_excel(excel_file)
-
+    with st.spinner("📊 Buchungs-Excel wird eingelesen..."):
+        df_excel, err = lade_excel(excel_file)
     if err:
-        st.error(f"Fehler beim Excel-Lesen: {err}")
+        st.error(f"Fehler beim Lesen der Buchungs-Excel: {err}")
         st.stop()
 
     fehlende = [c for c in [excel_rechnr, excel_datum, excel_soll, excel_haben]
                 if c not in df_excel.columns]
     if fehlende:
-        st.error(f"Diese Spalten wurden in der Excel-Datei nicht gefunden: {fehlende}")
-        with st.expander("Gefundene Spalten – zum Anpassen in der Seitenleiste"):
+        st.error(f"Diese Spalten wurden in der Buchungs-Excel nicht gefunden: {fehlende}")
+        with st.expander("📋 Gefundene Spalten in der Buchungs-Excel"):
             st.write(list(df_excel.columns))
+        with st.expander("🔍 Vorschau Buchungs-Excel (erste 5 Zeilen)"):
+            st.dataframe(df_excel.head())
         st.stop()
 
     # ── Abgleich ──
     with st.spinner("🔄 Abgleich läuft..."):
-        ergebnis = abgleichen(df_opos, df_excel, cfg, stichtag_input)
-
-                 # ── DIAGNOSE: Zeige was verglichen wird ──
-    with st.expander("🔍 Diagnose – Rechnungsnummern Vergleich"):
-        st.markdown("**Erste 10 Rechnungsnummern aus der OPOS-PDF:**")
-        opos_nrn = df_opos[opos_rechnr].apply(normalize_rechnr).head(10).tolist()
-        st.write(opos_nrn)
-        st.markdown("**Erste 10 Rechnungsnummern aus Excel:**")
-        excel_nrn = df_excel[excel_rechnr].apply(normalize_rechnr).head(10).tolist()
-        st.write(excel_nrn)
-        st.markdown("**Beispielvergleich – erste OPOS-Nr. gegen alle Excel-Nrn.:**")
-        if opos_nrn:
-            test = opos_nrn[0]
-            treffer = [e for e in excel_nrn if fuzzy_match(test, e, fuzzy)]
-            st.write(f"OPOS `{test}` → Treffer in Excel: {treffer if treffer else 'KEINER'}")
+        ergebnis = abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum)
 
     st.success("✅ Analyse abgeschlossen!")
 
@@ -495,7 +449,7 @@ if st.button("🚀 Analyse starten", type="primary",
         else:
             st.warning(
                 f"{len(ergebnis['missing'])} Buchung(en) aus der OPOS-Liste "
-                f"fehlen in Excel:"
+                f"fehlen in den gebuchten Buchungen:"
             )
             st.dataframe(ergebnis["missing"], use_container_width=True)
             csv = ergebnis["missing"].to_csv(
@@ -523,23 +477,33 @@ if st.button("🚀 Analyse starten", type="primary",
             )
 
     with tab3:
-        st.subheader(
-            f"Abstimmungsübersicht zum {stichtag_input.strftime('%d.%m.%Y')}"
-        )
+        st.subheader("Abstimmungsübersicht")
+
+        # Datumsfilter-Zusammenfassung
+        if von_datum and bis_datum:
+            st.info(
+                f"📅 Zeitraum: **{von_datum.strftime('%d.%m.%Y')}** "
+                f"bis **{bis_datum.strftime('%d.%m.%Y')}**"
+            )
+        elif bis_datum:
+            st.info(f"📅 Stichtag: **{bis_datum.strftime('%d.%m.%Y')}**")
+
         col_a, col_b = st.columns(2)
 
         with col_a:
             st.markdown("**Positionen**")
             st.write(f"OPOS-Positionen gesamt: **{ergebnis['opos_count']}**")
             st.write(f"Abgeglichen: **{len(ergebnis['matched'])}**")
-            st.write(f"Fehlend in Excel: **{len(ergebnis['missing'])}**")
+            st.write(f"Fehlend: **{len(ergebnis['missing'])}**")
             if not ergebnis["matched"].empty:
-                teil = len(
-                    ergebnis["matched"][
-                        ergebnis["matched"]["Typ"] == "Teilbuchungen"
-                    ]
-                )
+                teil = len(ergebnis["matched"][
+                    ergebnis["matched"]["Typ"] == "Teilbuchungen"
+                ])
+                diff_anz = len(ergebnis["matched"][
+                    ergebnis["matched"]["Typ"] == "Differenz"
+                ])
                 st.write(f"Mit Teilbuchungen: **{teil}**")
+                st.write(f"Mit Betragsdifferenz: **{diff_anz}**")
 
         with col_b:
             st.markdown("**Salden**")
@@ -554,21 +518,18 @@ if st.button("🚀 Analyse starten", type="primary",
         st.subheader("📌 Spiegelungslogik")
         if spiegelung:
             st.info(
-                "**Betrag Soll** (OPOS/Hauptverband) "
-                "↔ **Umsatz Haben** (Excel/Landesverband)\n\n"
-                "**Betrag Haben** (OPOS/Hauptverband) "
-                "↔ **Umsatz Soll** (Excel/Landesverband)"
+                "**OPOS Betrag Soll** (Hauptverband) "
+                "↔ **Excel Umsatz Haben** (Landesverband)\n\n"
+                "**OPOS Betrag Haben** (Hauptverband) "
+                "↔ **Excel Umsatz Soll** (Landesverband)"
             )
         else:
-            st.info(
-                "Spiegelung deaktiviert – Soll wird mit Soll verglichen."
-            )
+            st.info("Spiegelung deaktiviert – Soll wird mit Soll verglichen.")
 
-        # Rohdaten zur Kontrolle
-        with st.expander("🔍 Vorschau PDF-Rohdaten (erste 10 Zeilen)"):
-            st.dataframe(df_opos.head(10))
+        with st.expander("🔍 Vorschau OPOS-Rohdaten (erste 10 Zeilen)"):
+            st.dataframe(ergebnis["df_opos"].head(10))
         with st.expander("🔍 Vorschau Excel-Rohdaten (erste 10 Zeilen)"):
-            st.dataframe(df_excel.head(10))
+            st.dataframe(ergebnis["df_excel"].head(10))
 
-elif not pdf_file or not excel_file:
+elif not opos_file or not excel_file:
     st.info("👆 Bitte beide Dateien hochladen um die Analyse zu starten.")
