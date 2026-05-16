@@ -165,9 +165,15 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
                opt_von, opt_bis, extra_auswahl=None):
     """
     Kernfunktion: Vollständiger Buchungsabgleich.
-    - Hauptfilter: von_datum bis bis_datum (inklusiv) auf OPOS
-    - Optionaler Zeitraum: opt_von bis opt_bis (inklusiv) → separat angezeigt
-    - extra_auswahl: Rechnungsnummern aus optionalem Zeitraum die einbezogen werden
+
+    Zeitraumlogik (alle inklusiv):
+    - Hauptfilter: von_datum ≤ datum ≤ bis_datum
+    - Optionaler Zeitraum: opt_von ≤ datum ≤ opt_bis
+    - Buchungen im optionalen Zeitraum werden IMMER aus dem Hauptfilter
+      herausgenommen und separat angezeigt – unabhängig ob sie sonst
+      in den Hauptfilter fallen würden
+    - extra_auswahl: Rechnungsnummern aus optionalem Zeitraum
+      die der Benutzer manuell einbezogen hat
     """
     col_o_rechnr = cfg["opos_rechnr"]
     col_o_datum  = cfg["opos_datum"]
@@ -184,6 +190,8 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
     tol          = cfg["toleranz"]
     spiegelung   = cfg["spiegelung"]
 
+    hat_opt = opt_von is not None and opt_bis is not None
+
     # ── OPOS vorbereiten ──
     df_opos = df_opos.copy()
     df_opos["_datum"]  = df_opos[col_o_datum].apply(parse_datum)
@@ -195,24 +203,24 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
         lambda r: opos_soll_haben(r[col_o_saldo], r[col_o_kz])[1], axis=1
     )
 
-    # ── Optionaler Zeitraum: außerhalb Hauptfilter aber im opt. Zeitraum ──
-    hat_opt = opt_von is not None and opt_bis is not None
-
-    def ist_optional(d):
+    # ── Optionaler Zeitraum ermitteln ──
+    # Buchungen die im opt. Zeitraum liegen → IMMER separat, nie im Hauptfilter
+    def ist_in_opt_zeitraum(d):
         if not hat_opt:
             return False
-        im_opt   = datum_in_bereich(d, opt_von, opt_bis)
-        im_haupt = datum_in_bereich(d, von_datum, bis_datum)
-        return im_opt and not im_haupt
+        return datum_in_bereich(d, opt_von, opt_bis)
 
-    df_optional = df_opos[df_opos["_datum"].apply(ist_optional)].copy()
+    df_opos["_ist_opt"] = df_opos["_datum"].apply(ist_in_opt_zeitraum)
 
- # ── Hauptfilter auf OPOS ──
-    # Buchungen im optionalen Zeitraum werden IMMER herausgenommen
-    df_opos_filtered = df_opos[df_opos["_datum"].apply(
-        lambda d: datum_in_bereich(d, von_datum, bis_datum)
-                  and not ist_optional(d)
-    )].copy()
+    # Optionale Buchungen
+    df_optional = df_opos[df_opos["_ist_opt"]].copy()
+
+    # ── Hauptfilter: nur Buchungen im Hauptzeitraum UND NICHT im opt. Zeitraum ──
+    df_opos_filtered = df_opos[
+        df_opos["_datum"].apply(
+            lambda d: datum_in_bereich(d, von_datum, bis_datum)
+        ) & ~df_opos["_ist_opt"]
+    ].copy()
 
     # ── Ausgewählte optionale Buchungen hinzufügen ──
     if extra_auswahl is not None and len(extra_auswahl) > 0:
@@ -359,22 +367,24 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
         "offene_analyse":    offene_fuer_analyse,
         "col_o_rechnr":      col_o_rechnr,
         "col_o_text":        col_o_text,
+        "col_o_saldo":       col_o_saldo,
+        "col_o_kz":          col_o_kz,
     }
 
 
 # ─────────────────────────────────────────────
-#  SESSION STATE initialisieren
+#  SESSION STATE
 # ─────────────────────────────────────────────
 for key, val in {
-    "ergebnis":     None,
+    "ergebnis":      None,
     "extra_auswahl": [],
-    "df_opos_raw":  None,
-    "df_excel_raw": None,
-    "cfg":          None,
-    "_von_datum":   None,
-    "_bis_datum":   None,
-    "_opt_von":     None,
-    "_opt_bis":     None,
+    "df_opos_raw":   None,
+    "df_excel_raw":  None,
+    "cfg":           None,
+    "_von_datum":    None,
+    "_bis_datum":    None,
+    "_opt_von":      None,
+    "_opt_bis":      None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
@@ -386,7 +396,6 @@ for key, val in {
 with st.sidebar:
     st.header("⚙️ Einstellungen")
 
-    # ── Hauptfilter ──
     st.subheader("📅 Hauptfilter")
     von_datum = st.date_input(
         "Von Datum (optional)", value=None,
@@ -398,13 +407,13 @@ with st.sidebar:
         help="Buchungen NACH diesem Datum werden ignoriert (inklusiv)"
     )
     if von_datum and bis_datum and von_datum > bis_datum:
-        st.error("⚠️ Von-Datum darf nicht nach dem Bis-Datum liegen!")
+        st.error("⚠️ Von-Datum darf nicht nach Bis-Datum liegen!")
 
-    # ── Optionaler Zeitraum ──
     st.subheader("📅 Optionaler Zeitraum")
     st.caption(
-        "Buchungen in diesem Zeitraum werden separat angezeigt "
-        "und können einzeln einbezogen werden. Beide Daten inklusiv."
+        "Buchungen in diesem Zeitraum werden IMMER aus dem Hauptfilter "
+        "herausgenommen und separat mit Checkboxen angezeigt. "
+        "Beide Daten inklusiv."
     )
     opt_von = st.date_input(
         "Von (optional)", value=None, key="widget_opt_von",
@@ -417,7 +426,6 @@ with st.sidebar:
     if opt_von and opt_bis and opt_von > opt_bis:
         st.error("⚠️ Opt. Von darf nicht nach Opt. Bis liegen!")
 
-    # ── OPOS Spalten ──
     st.subheader("📄 Spalten OPOS-Datei")
     opos_rechnr = st.text_input("Rechnungsnummer",   value="Rechnungs-Nr.")
     opos_datum  = st.text_input("Buchungsdatum",     value="Datum")
@@ -426,7 +434,6 @@ with st.sidebar:
     opos_kz     = st.text_input("Kennzeichen (S/H)", value="Unnamed: 9")
     st.caption("S = Soll, H = Haben")
 
-    # ── Excel Spalten ──
     st.subheader("📊 Spalten Buchungs-Excel")
     excel_rechnr = st.text_input("Rechnungsnummer / Buchungsfeld", value="Belegfeld1")
     excel_datum  = st.text_input("Buchungsdatum ",                  value="Datum")
@@ -434,7 +441,6 @@ with st.sidebar:
     excel_soll   = st.text_input("Umsatz Soll",                    value="Umsatz Soll")
     excel_haben  = st.text_input("Umsatz Haben",                   value="Umsatz Haben")
 
-    # ── Abgleichsoptionen ──
     st.subheader("🔄 Abgleichsoptionen")
     spiegelung = st.checkbox(
         "Soll/Haben-Spiegelung aktiv", value=True,
@@ -478,7 +484,8 @@ elif bis_datum:
 if opt_von and opt_bis:
     st.info(
         f"📅 Optionaler Zeitraum: **{opt_von.strftime('%d.%m.%Y')}** "
-        f"bis **{opt_bis.strftime('%d.%m.%Y')}** (inklusiv)"
+        f"bis **{opt_bis.strftime('%d.%m.%Y')}** (inklusiv) – "
+        f"immer aus Hauptfilter herausgenommen"
     )
 
 st.divider()
@@ -531,7 +538,7 @@ if st.button(
             st.write(list(df_excel.columns))
         st.stop()
 
-    # Session State speichern – Widget-Keys vermeiden!
+    # Session State – Widget-Keys vermeiden!
     st.session_state["df_opos_raw"]   = df_opos
     st.session_state["df_excel_raw"]  = df_excel
     st.session_state["cfg"]           = cfg
@@ -580,7 +587,6 @@ if st.session_state["ergebnis"]:
 
     st.divider()
 
-    # Spiegelungsabgleich
     st.markdown("**🔄 Spiegelungsabgleich**")
     st.caption("Soll OPOS entspricht Haben Excel · Haben OPOS entspricht Soll Excel")
 
@@ -608,15 +614,18 @@ if st.session_state["ergebnis"]:
     st.divider()
 
     # ══════════════════════════════════════════
-    #  OPTIONALER ZEITRAUM
+    #  OPTIONALE BUCHUNGEN MIT CHECKBOXEN
     # ══════════════════════════════════════════
     df_opt     = ergebnis["df_optional"]
     col_rechnr = ergebnis["col_o_rechnr"]
     col_text   = ergebnis["col_o_text"]
+    col_saldo  = ergebnis["col_o_saldo"]
+    col_kz     = ergebnis["col_o_kz"]
 
     if len(df_opt) > 0:
         _opt_von = st.session_state["_opt_von"]
         _opt_bis = st.session_state["_opt_bis"]
+
         zeitraum_str = ""
         if _opt_von and _opt_bis:
             zeitraum_str = (
@@ -627,8 +636,8 @@ if st.session_state["ergebnis"]:
         st.subheader("📅 Optionale Buchungen")
         st.info(
             f"**{len(df_opt)} Buchungen** im optionalen Zeitraum"
-            f"{zeitraum_str} gefunden. "
-            f"Einzeln einbeziehen:"
+            f"{zeitraum_str}. "
+            f"Wähle aus welche in die Abstimmung einbezogen werden sollen:"
         )
 
         auswahl = []
@@ -641,18 +650,25 @@ if st.session_state["ergebnis"]:
             soll    = row["_soll"]
             haben   = row["_haben"]
             betrag  = fmt_eur(soll) if soll > 0 else fmt_eur(haben)
-            kz      = str(row.get(cfg["opos_kz"], "")).strip()
-            datum   = row["_datum"]
-            datum_s = datum.strftime("%d.%m.%Y") if datum else "?"
-            label   = f"**{rechnr}** · {datum_s} · {text[:40]} · {betrag} ({kz})"
+            kz      = str(row.get(col_kz, "")).strip()
+            d       = row["_datum"]
+            datum_s = d.strftime("%d.%m.%Y") if d else "?"
+            saldo_raw = row.get(col_saldo, "")
+
+            label = (
+                f"**{rechnr}** · {datum_s} · "
+                f"{text[:45]} · "
+                f"**{betrag}** ({kz})"
+            )
             checked = rechnr in st.session_state["extra_auswahl"]
 
             if st.checkbox(label, value=checked, key=f"cb_opt_{rechnr}"):
                 auswahl.append(rechnr)
 
+        # Neu berechnen wenn Auswahl geändert
         if sorted(auswahl) != sorted(st.session_state["extra_auswahl"]):
             st.session_state["extra_auswahl"] = auswahl
-            with st.spinner("🔄 Wird neu berechnet..."):
+            with st.spinner("🔄 Salden werden neu berechnet..."):
                 st.session_state["ergebnis"] = abgleichen(
                     st.session_state["df_opos_raw"],
                     st.session_state["df_excel_raw"],
@@ -666,8 +682,21 @@ if st.session_state["ergebnis"]:
             st.rerun()
 
         if auswahl:
-            st.success(f"✓ {len(auswahl)} Buchung(en) zusätzlich einbezogen")
+            st.success(
+                f"✓ {len(auswahl)} von {len(df_opt)} Buchung(en) "
+                f"zusätzlich einbezogen"
+            )
+        else:
+            st.caption("☐ Keine Buchungen aus dem optionalen Zeitraum ausgewählt")
 
+        st.divider()
+
+    elif opt_von and opt_bis:
+        st.info(
+            f"ℹ️ Keine Buchungen im optionalen Zeitraum "
+            f"({opt_von.strftime('%d.%m.%Y')} – "
+            f"{opt_bis.strftime('%d.%m.%Y')}) gefunden."
+        )
         st.divider()
 
     # ══════════════════════════════════════════
@@ -755,7 +784,8 @@ if st.session_state["ergebnis"]:
             "**OPOS Kennzeichen S** ↔ **Excel Umsatz Haben**\n\n"
             "**OPOS Kennzeichen H** ↔ **Excel Umsatz Soll**\n\n"
             "Differenz = (Soll OPOS − Haben Excel) − (Haben OPOS − Soll Excel)\n\n"
-            "Alle Zeiträume sind **inklusiv** (von ≤ Datum ≤ bis)"
+            "Alle Zeiträume sind **inklusiv** (von ≤ Datum ≤ bis)\n\n"
+            "Optionaler Zeitraum: wird IMMER aus Hauptfilter herausgenommen"
         )
         with st.expander("🔍 Vorschau OPOS (erste 10 Zeilen)"):
             st.dataframe(ergebnis["df_opos"].head(10))
