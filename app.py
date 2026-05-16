@@ -207,9 +207,11 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
 
     df_optional = df_opos[df_opos["_datum"].apply(ist_optional)].copy()
 
-    # ── Hauptfilter auf OPOS ──
+ # ── Hauptfilter auf OPOS ──
+    # Buchungen im optionalen Zeitraum werden IMMER herausgenommen
     df_opos_filtered = df_opos[df_opos["_datum"].apply(
         lambda d: datum_in_bereich(d, von_datum, bis_datum)
+                  and not ist_optional(d)
     )].copy()
 
     # ── Ausgewählte optionale Buchungen hinzufügen ──
