@@ -130,10 +130,7 @@ def lade_excel(uploaded_file):
 
 
 def opos_soll_haben(betrag, kennzeichen):
-    """
-    Leitet Soll/Haben aus Saldo-Betrag und Kennzeichen ab.
-    S = Soll, H = Haben
-    """
+    """Leitet Soll/Haben aus Saldo-Betrag und Kennzeichen ab. S=Soll, H=Haben"""
     kz = str(kennzeichen).strip().upper() if kennzeichen else ""
     b  = abs(to_float(betrag))
     if kz.startswith("S"):
@@ -168,11 +165,9 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
                opt_von, opt_bis, extra_auswahl=None):
     """
     Kernfunktion: Vollständiger Buchungsabgleich.
-    - Hauptfilter: von_datum bis bis_datum (OPOS)
-    - Optionaler Zeitraum: opt_von bis opt_bis → werden separat angezeigt
-    - extra_auswahl: Liste von Rechnungsnummern aus optionalem Zeitraum
-      die zusätzlich einbezogen werden sollen
-    Alle Zeiträume sind inklusiv (von ≤ datum ≤ bis).
+    - Hauptfilter: von_datum bis bis_datum (inklusiv) auf OPOS
+    - Optionaler Zeitraum: opt_von bis opt_bis (inklusiv) → separat angezeigt
+    - extra_auswahl: Rechnungsnummern aus optionalem Zeitraum die einbezogen werden
     """
     col_o_rechnr = cfg["opos_rechnr"]
     col_o_datum  = cfg["opos_datum"]
@@ -200,21 +195,19 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
         lambda r: opos_soll_haben(r[col_o_saldo], r[col_o_kz])[1], axis=1
     )
 
-    # ── Optionaler Zeitraum: Buchungen die außerhalb Hauptfilter liegen ──
-    # aber im optionalen Zeitraum (z.B. 30.12–31.12)
+    # ── Optionaler Zeitraum: außerhalb Hauptfilter aber im opt. Zeitraum ──
     hat_opt = opt_von is not None and opt_bis is not None
 
     def ist_optional(d):
-        """True wenn Datum im optionalen Zeitraum liegt (und außerhalb Hauptfilter)."""
         if not hat_opt:
             return False
-        im_opt = datum_in_bereich(d, opt_von, opt_bis)
+        im_opt   = datum_in_bereich(d, opt_von, opt_bis)
         im_haupt = datum_in_bereich(d, von_datum, bis_datum)
         return im_opt and not im_haupt
 
     df_optional = df_opos[df_opos["_datum"].apply(ist_optional)].copy()
 
-    # ── Hauptfilter auf OPOS (ohne optionalen Zeitraum) ──
+    # ── Hauptfilter auf OPOS ──
     df_opos_filtered = df_opos[df_opos["_datum"].apply(
         lambda d: datum_in_bereich(d, von_datum, bis_datum)
     )].copy()
@@ -316,7 +309,7 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
             "OK":                   ok
         })
 
-    # ── Salden berechnen ──
+    # ── Salden ──
     opos_summe_soll  = df_opos_filtered["_soll"].sum()
     opos_summe_haben = df_opos_filtered["_haben"].sum()
     saldo_opos       = opos_summe_soll - opos_summe_haben
@@ -325,7 +318,6 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
     excel_summe_haben = df_excel["_haben"].sum()
     saldo_excel       = -(excel_summe_haben - excel_summe_soll)
 
-    # Spiegelungsabgleich
     diff_a    = opos_summe_soll  - excel_summe_haben
     diff_b    = opos_summe_haben - excel_summe_soll
     differenz = diff_a - diff_b
@@ -369,6 +361,24 @@ def abgleichen(df_opos, df_excel, cfg, von_datum, bis_datum,
 
 
 # ─────────────────────────────────────────────
+#  SESSION STATE initialisieren
+# ─────────────────────────────────────────────
+for key, val in {
+    "ergebnis":     None,
+    "extra_auswahl": [],
+    "df_opos_raw":  None,
+    "df_excel_raw": None,
+    "cfg":          None,
+    "_von_datum":   None,
+    "_bis_datum":   None,
+    "_opt_von":     None,
+    "_opt_bis":     None,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
+
+
+# ─────────────────────────────────────────────
 #  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
@@ -392,23 +402,18 @@ with st.sidebar:
     st.subheader("📅 Optionaler Zeitraum")
     st.caption(
         "Buchungen in diesem Zeitraum werden separat angezeigt "
-        "und können einzeln einbezogen werden. "
-        "Beide Daten inklusiv."
+        "und können einzeln einbezogen werden. Beide Daten inklusiv."
     )
     opt_von = st.date_input(
-        "Von (optional)",
-        value=None,
-        key="opt_von",
+        "Von (optional)", value=None, key="widget_opt_von",
         help="z.B. 30.12.2025 – inklusiv"
     )
     opt_bis = st.date_input(
-        "Bis (optional)",
-        value=None,
-        key="opt_bis",
+        "Bis (optional)", value=None, key="widget_opt_bis",
         help="z.B. 31.12.2025 – inklusiv"
     )
     if opt_von and opt_bis and opt_von > opt_bis:
-        st.error("⚠️ Opt. Von-Datum darf nicht nach dem Opt. Bis-Datum liegen!")
+        st.error("⚠️ Opt. Von darf nicht nach Opt. Bis liegen!")
 
     # ── OPOS Spalten ──
     st.subheader("📄 Spalten OPOS-Datei")
@@ -459,37 +464,22 @@ with col2:
     if excel_file:
         st.success(f"✓ {excel_file.name}")
 
-# Filter-Info anzeigen
-info_parts = []
+# Filter-Info
 if von_datum and bis_datum:
-    info_parts.append(
+    st.info(
         f"📅 Hauptfilter: **{von_datum.strftime('%d.%m.%Y')}** "
         f"bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)"
     )
 elif bis_datum:
-    info_parts.append(
-        f"📅 Stichtag: bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)"
-    )
+    st.info(f"📅 Stichtag: bis **{bis_datum.strftime('%d.%m.%Y')}** (inklusiv)")
+
 if opt_von and opt_bis:
-    info_parts.append(
+    st.info(
         f"📅 Optionaler Zeitraum: **{opt_von.strftime('%d.%m.%Y')}** "
         f"bis **{opt_bis.strftime('%d.%m.%Y')}** (inklusiv)"
     )
-for info in info_parts:
-    st.info(info)
 
 st.divider()
-
-# ─────────────────────────────────────────────
-#  SESSION STATE
-# ─────────────────────────────────────────────
-for key, val in {
-    "ergebnis": None, "extra_auswahl": [], "df_opos_raw": None,
-    "df_excel_raw": None, "cfg": None, "von_datum": None,
-    "bis_datum": None, "opt_von": None, "opt_bis": None,
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
 
 
 # ─────────────────────────────────────────────
@@ -539,14 +529,18 @@ if st.button(
             st.write(list(df_excel.columns))
         st.stop()
 
-    st.session_state.update({
-        "df_opos_raw": df_opos, "df_excel_raw": df_excel,
-        "cfg": cfg, "von_datum": von_datum, "bis_datum": bis_datum,
-        "opt_von": opt_von, "opt_bis": opt_bis, "extra_auswahl": []
-    })
+    # Session State speichern – Widget-Keys vermeiden!
+    st.session_state["df_opos_raw"]   = df_opos
+    st.session_state["df_excel_raw"]  = df_excel
+    st.session_state["cfg"]           = cfg
+    st.session_state["_von_datum"]    = von_datum
+    st.session_state["_bis_datum"]    = bis_datum
+    st.session_state["_opt_von"]      = opt_von
+    st.session_state["_opt_bis"]      = opt_bis
+    st.session_state["extra_auswahl"] = []
 
     with st.spinner("🔄 Abgleich läuft..."):
-        st.session_state.ergebnis = abgleichen(
+        st.session_state["ergebnis"] = abgleichen(
             df_opos, df_excel, cfg,
             von_datum, bis_datum,
             opt_von, opt_bis, []
@@ -556,9 +550,9 @@ if st.button(
 # ─────────────────────────────────────────────
 #  ERGEBNISSE
 # ─────────────────────────────────────────────
-if st.session_state.ergebnis:
-    ergebnis = st.session_state.ergebnis
-    cfg      = st.session_state.cfg
+if st.session_state["ergebnis"]:
+    ergebnis = st.session_state["ergebnis"]
+    cfg      = st.session_state["cfg"]
 
     st.success("✅ Analyse abgeschlossen!")
 
@@ -593,14 +587,9 @@ if st.session_state.ergebnis:
     diff_b    = ergebnis["diff_b"]
     differenz = ergebnis["differenz_ab"]
 
-    ca.metric(
-        "(a) Soll OPOS − Haben Excel", fmt_eur(diff_a),
-        help="Sollte 0 sein wenn vollständig abgestimmt"
-    )
-    cb.metric(
-        "(b) Haben OPOS − Soll Excel", fmt_eur(diff_b),
-        help="Sollte 0 sein wenn vollständig abgestimmt"
-    )
+    ca.metric("(a) Soll OPOS − Haben Excel", fmt_eur(diff_a))
+    cb.metric("(b) Haben OPOS − Soll Excel", fmt_eur(diff_b))
+
     with cdiff:
         if abs(differenz) < cfg["toleranz"]:
             st.success("✅ Vollständig abgestimmt")
@@ -624,19 +613,20 @@ if st.session_state.ergebnis:
     col_text   = ergebnis["col_o_text"]
 
     if len(df_opt) > 0:
-        opt_von_s = st.session_state.opt_von
-        opt_bis_s = st.session_state.opt_bis
+        _opt_von = st.session_state["_opt_von"]
+        _opt_bis = st.session_state["_opt_bis"]
         zeitraum_str = ""
-        if opt_von_s and opt_bis_s:
+        if _opt_von and _opt_bis:
             zeitraum_str = (
-                f" ({opt_von_s.strftime('%d.%m.%Y')} – "
-                f"{opt_bis_s.strftime('%d.%m.%Y')}, inklusiv)"
+                f" ({_opt_von.strftime('%d.%m.%Y')} – "
+                f"{_opt_bis.strftime('%d.%m.%Y')}, inklusiv)"
             )
 
         st.subheader("📅 Optionale Buchungen")
         st.info(
-            f"**{len(df_opt)} Buchungen** im optionalen Zeitraum{zeitraum_str} gefunden. "
-            f"Diese liegen außerhalb des Hauptfilters – einzeln einbeziehen:"
+            f"**{len(df_opt)} Buchungen** im optionalen Zeitraum"
+            f"{zeitraum_str} gefunden. "
+            f"Einzeln einbeziehen:"
         )
 
         auswahl = []
@@ -653,22 +643,22 @@ if st.session_state.ergebnis:
             datum   = row["_datum"]
             datum_s = datum.strftime("%d.%m.%Y") if datum else "?"
             label   = f"**{rechnr}** · {datum_s} · {text[:40]} · {betrag} ({kz})"
-            checked = rechnr in st.session_state.extra_auswahl
+            checked = rechnr in st.session_state["extra_auswahl"]
 
             if st.checkbox(label, value=checked, key=f"cb_opt_{rechnr}"):
                 auswahl.append(rechnr)
 
-        if sorted(auswahl) != sorted(st.session_state.extra_auswahl):
-            st.session_state.extra_auswahl = auswahl
+        if sorted(auswahl) != sorted(st.session_state["extra_auswahl"]):
+            st.session_state["extra_auswahl"] = auswahl
             with st.spinner("🔄 Wird neu berechnet..."):
-                st.session_state.ergebnis = abgleichen(
-                    st.session_state.df_opos_raw,
-                    st.session_state.df_excel_raw,
+                st.session_state["ergebnis"] = abgleichen(
+                    st.session_state["df_opos_raw"],
+                    st.session_state["df_excel_raw"],
                     cfg,
-                    st.session_state.von_datum,
-                    st.session_state.bis_datum,
-                    st.session_state.opt_von,
-                    st.session_state.opt_bis,
+                    st.session_state["_von_datum"],
+                    st.session_state["_bis_datum"],
+                    st.session_state["_opt_von"],
+                    st.session_state["_opt_bis"],
                     auswahl
                 )
             st.rerun()
