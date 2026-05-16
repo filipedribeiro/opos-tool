@@ -400,7 +400,7 @@ with st.sidebar:
         "Soll/Haben-Spiegelung aktiv", value=True,
         help="OPOS S ↔ Excel Umsatz Haben"
     )
-    fuzzy    = st.slider("Fuzzy-Matching (%)", 60, 100, 85)
+    fuzzy    = st.slider("Fuzzy-Matching (%)", 60, 100, 100)
     toleranz = st.number_input("Betragstoleranz (€)", value=0.01, step=0.01)
 
 
