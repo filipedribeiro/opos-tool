@@ -137,19 +137,53 @@ def opos_soll_haben(betrag, kennzeichen):
             return 0.0, abs(raw)
 
 
-def finde_erklaerende_buchungen(differenz, offene_buchungen, tol=0.01):
-    if abs(differenz) < tol:
+def finde_kombination(ziel_betrag, buchungen, tol=0.01, max_results=5):
+    """Sucht Kombinationen die einen Zielbetrag ergeben."""
+    if abs(ziel_betrag) < tol:
         return []
     ergebnisse = []
-    buchungen  = offene_buchungen[:500]
+    buch = buchungen[:500]
     for anzahl in range(1, 5):
-        for kombi in combinations(range(len(buchungen)), anzahl):
-            summe = sum(buchungen[i]["betrag"] for i in kombi)
-            if abs(summe - abs(differenz)) <= tol:
-                ergebnisse.append([buchungen[i] for i in kombi])
-            if len(ergebnisse) >= 5:
+        for kombi in combinations(range(len(buch)), anzahl):
+            summe = sum(buch[i]["betrag"] for i in kombi)
+            if abs(summe - abs(ziel_betrag)) <= tol:
+                ergebnisse.append([buch[i] for i in kombi])
+            if len(ergebnisse) >= max_results:
                 return ergebnisse
     return ergebnisse
+
+
+def finde_erklaerende_buchungen_getrennt(diff_a, diff_b, missing_raw, tol=0.01):
+    """
+    Sucht getrennt nach Soll- und Haben-Buchungen.
+    diff_a = Soll OPOS - Haben Excel → fehlende S-Buchungen
+    diff_b = Haben OPOS - Soll Excel → fehlende H-Buchungen
+    """
+    soll_buchungen  = []
+    haben_buchungen = []
+
+    for m in missing_raw:
+        soll   = m["_soll"]
+        haben  = m["_haben"]
+        rechnr = str(m["Rechnungsnr. (OPOS)"])
+        text   = m["Buchungstext"]
+        datum  = str(m["Datum"])[:10]
+
+        if soll > 0:
+            soll_buchungen.append({
+                "rechnr": rechnr, "text": text, "datum": datum,
+                "betrag": soll, "kz": "S"
+            })
+        if haben > 0:
+            haben_buchungen.append({
+                "rechnr": rechnr, "text": text, "datum": datum,
+                "betrag": haben, "kz": "H"
+            })
+
+    kombi_soll  = finde_kombination(diff_a, soll_buchungen,  tol) if abs(diff_a) > tol else []
+    kombi_haben = finde_kombination(diff_b, haben_buchungen, tol) if abs(diff_b) > tol else []
+
+    return kombi_soll, kombi_haben, soll_buchungen, haben_buchungen
 
 
 def berechne_salden(ergebnis, simulierte_rechnr, cfg):
@@ -693,34 +727,69 @@ if st.session_state["ergebnis"]:
         st.divider()
 
     # ══════════════════════════════════════════
-    #  DIFFERENZANALYSE
+    #  DIFFERENZANALYSE (getrennt Soll/Haben)
     # ══════════════════════════════════════════
-    if abs(differenz) >= cfg["toleranz"] and ergebnis["offene_analyse"]:
+    if abs(differenz) >= cfg["toleranz"] and ergebnis["missing_raw"]:
         st.subheader("🔍 Differenzanalyse")
         st.warning(
             f"Differenz von **{fmt_eur(abs(differenz))}** erkannt. "
-            f"Suche nach Buchungen die diese erklären..."
+            f"Suche getrennt nach Soll- und Haben-Buchungen..."
         )
 
         with st.spinner("Kombinationen werden berechnet..."):
-            kombinationen = finde_erklaerende_buchungen(
-                differenz, ergebnis["offene_analyse"], cfg["toleranz"]
+            kombi_soll, kombi_haben, soll_buch, haben_buch = (
+                finde_erklaerende_buchungen_getrennt(
+                    diff_a, diff_b,
+                    ergebnis["missing_raw"],
+                    cfg["toleranz"]
+                )
             )
 
-        if kombinationen:
-            st.success(f"✅ **{len(kombinationen)} mögliche Erklärung(en)** gefunden!")
-            for i, kombi in enumerate(kombinationen, 1):
-                summe = sum(b["betrag"] for b in kombi)
-                with st.expander(
-                    f"Möglichkeit {i}: "
-                    f"{' + '.join(fmt_eur(b['betrag']) for b in kombi)} "
-                    f"= {fmt_eur(summe)}"
-                ):
-                    for b in kombi:
-                        st.write(f"📌 **{b['rechnr']}** – {b['text']} – {fmt_eur(b['betrag'])}")
-                    st.info("Diese Buchung(en) erklären die Differenz vollständig.")
-        else:
-            st.info("Keine Kombination gefunden. Bitte manuell prüfen.")
+        col_s, col_h = st.columns(2)
+
+        with col_s:
+            st.markdown(f"**Soll-Seite** · (a) = {fmt_eur(diff_a)}")
+            if abs(diff_a) < cfg["toleranz"]:
+                st.success("✅ Soll-Seite bereits ausgeglichen")
+            elif kombi_soll:
+                st.success(f"✅ {len(kombi_soll)} Möglichkeit(en) gefunden")
+                for i, kombi in enumerate(kombi_soll, 1):
+                    summe = sum(b["betrag"] for b in kombi)
+                    with st.expander(
+                        f"S-Möglichkeit {i}: "
+                        f"{' + '.join(fmt_eur(b['betrag']) for b in kombi)} "
+                        f"= {fmt_eur(summe)}"
+                    ):
+                        for b in kombi:
+                            st.write(
+                                f"📌 **{b['rechnr']}** · {b['datum']} · "
+                                f"{b['text']} · {fmt_eur(b['betrag'])} (S)"
+                            )
+                        st.info("Diese S-Buchung(en) gleichen die Soll-Differenz aus.")
+            else:
+                st.info(f"Keine Kombination aus {len(soll_buch)} S-Buchungen gefunden.")
+
+        with col_h:
+            st.markdown(f"**Haben-Seite** · (b) = {fmt_eur(diff_b)}")
+            if abs(diff_b) < cfg["toleranz"]:
+                st.success("✅ Haben-Seite bereits ausgeglichen")
+            elif kombi_haben:
+                st.success(f"✅ {len(kombi_haben)} Möglichkeit(en) gefunden")
+                for i, kombi in enumerate(kombi_haben, 1):
+                    summe = sum(b["betrag"] for b in kombi)
+                    with st.expander(
+                        f"H-Möglichkeit {i}: "
+                        f"{' + '.join(fmt_eur(b['betrag']) for b in kombi)} "
+                        f"= {fmt_eur(summe)}"
+                    ):
+                        for b in kombi:
+                            st.write(
+                                f"📌 **{b['rechnr']}** · {b['datum']} · "
+                                f"{b['text']} · {fmt_eur(b['betrag'])} (H)"
+                            )
+                        st.info("Diese H-Buchung(en) gleichen die Haben-Differenz aus.")
+            else:
+                st.info(f"Keine Kombination aus {len(haben_buch)} H-Buchungen gefunden.")
 
         st.divider()
 
