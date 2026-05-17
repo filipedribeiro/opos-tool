@@ -138,11 +138,23 @@ def opos_soll_haben(betrag, kennzeichen):
 
 
 def finde_kombination(ziel_betrag, buchungen, tol=0.01, max_results=5):
-    """Sucht Kombinationen die einen Zielbetrag ergeben."""
+    """
+    Sucht Kombinationen die einen Zielbetrag ergeben.
+    Prüft zuerst ob alle Buchungen zusammen die Differenz erklären,
+    dann 1er bis 4er Kombinationen.
+    """
     if abs(ziel_betrag) < tol:
         return []
-    ergebnisse = []
+
     buch = buchungen[:500]
+    ergebnisse = []
+
+    # Zuerst: Summe ALLER Buchungen prüfen
+    summe_alle = sum(b["betrag"] for b in buch)
+    if abs(summe_alle - abs(ziel_betrag)) <= tol:
+        return [buch]  # Alle zusammen erklären die Differenz
+
+    # Dann: 1er bis 4er Kombinationen
     for anzahl in range(1, 5):
         for kombi in combinations(range(len(buch)), anzahl):
             summe = sum(buch[i]["betrag"] for i in kombi)
@@ -150,6 +162,7 @@ def finde_kombination(ziel_betrag, buchungen, tol=0.01, max_results=5):
                 ergebnisse.append([buch[i] for i in kombi])
             if len(ergebnisse) >= max_results:
                 return ergebnisse
+
     return ergebnisse
 
 
